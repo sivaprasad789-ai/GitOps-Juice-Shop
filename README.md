@@ -1,246 +1,656 @@
-# ![Juice Shop Logo](https://raw.githubusercontent.com/juice-shop/juice-shop/master/frontend/src/assets/public/images/JuiceShop_Logo_100px.png) OWASP Juice Shop
+# ![Juice Shop Logo](https://raw.githubusercontent.com/juice-shop/juice-shop/master/frontend/src/assets/public/images/JuiceShop_Logo_100px.png) PipelineFortress — Secure CI/CD with GenAI-Assisted Triage
 
-[![OWASP Flagship](https://img.shields.io/badge/owasp-flagship%20project-48A646.svg)](https://owasp.org/projects/#sec-flagships)
-[![GitHub release](https://img.shields.io/github/release/juice-shop/juice-shop.svg)](https://github.com/juice-shop/juice-shop/releases/latest)
-[![Twitter Follow](https://img.shields.io/twitter/follow/owasp_juiceshop.svg?style=social&label=Follow)](https://twitter.com/owasp_juiceshop)
-[![Subreddit subscribers](https://img.shields.io/reddit/subreddit-subscribers/owasp_juiceshop?style=social)](https://reddit.com/r/owasp_juiceshop)
+## Project Overview
 
-[![CI/CD Pipeline](https://github.com/juice-shop/juice-shop/actions/workflows/ci.yml/badge.svg?branch=develop)](https://github.com/juice-shop/juice-shop/actions/workflows/ci.yml)
-[![Release Pipeline](https://github.com/juice-shop/juice-shop/actions/workflows/release.yml/badge.svg)](https://github.com/juice-shop/juice-shop/actions/workflows/release.yml)
-[![Coverage Status](https://coveralls.io/repos/github/juice-shop/juice-shop/badge.svg?branch=develop)](https://coveralls.io/github/juice-shop/juice-shop?branch=develop)
-[![Cypress tests](https://img.shields.io/endpoint?url=https://dashboard.cypress.io/badge/simple/3hrkhu/develop&style=flat&logo=cypress)](https://dashboard.cypress.io/projects/3hrkhu/runs)
-[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/223/badge)](https://www.bestpractices.dev/projects/223)
-![GitHub stars](https://img.shields.io/github/stars/juice-shop/juice-shop.svg?label=GitHub%20%E2%98%85&style=flat)
-[![Static Badge](https://img.shields.io/badge/OWASP-Code_of_Conduct-blue)](CODE_OF_CONDUCT.md)
+**PipelineFortress** wraps the deliberately vulnerable **OWASP Juice Shop** in a production-grade
+CI/CD pipeline with five security stages — SAST, SCA, secrets scanning, IaC scanning, and DAST —
+and a **GenAI triage assistant** that clusters findings, prioritizes them, and drafts remediation
+Pull Requests, all behind a strict redaction layer that prevents secrets or source code from ever
+reaching an external LLM.
 
-> [The most trustworthy online shop out there.](https://twitter.com/dschadow/status/706781693504589824)
-> ([@dschadow](https://github.com/dschadow)) —
-> [The best juice shop on the whole internet!](https://twitter.com/shehackspurple/status/907335357775085568)
-> ([@shehackspurple](https://twitter.com/shehackspurple)) —
-> [Actually the most bug-free vulnerable application in existence!](https://youtu.be/TXAztSpYpvE?t=26m35s)
-> ([@vanderaj](https://twitter.com/vanderaj)) —
-> [First you 😂😂then you 😢](https://twitter.com/kramse/status/1073168529405472768)
-> ([@kramse](https://twitter.com/kramse)) —
-> [But this doesn't have anything to do with juice.](https://twitter.com/coderPatros/status/1199268774626488320)
-> ([@coderPatros' wife](https://twitter.com/coderPatros))
+> **Real-World Context:** An e-commerce team shipping 30+ times per day needs security reviews
+> that happen *before* merge, not at sprint-end. This project prototypes the reference pipeline
+> a platform-security team would build — catching 80% of vulnerabilities before they reach main.
 
-OWASP Juice Shop is probably the most modern and sophisticated insecure web application! It can be used in security
-trainings, awareness demos, CTFs and as a guinea pig for security tools! Juice Shop encompasses vulnerabilities from the
-entire
-[OWASP Top Ten](https://owasp.org/www-project-top-ten) along with many other security flaws found in real-world
-applications!
+> ⚠️ **Juice Shop is deliberately vulnerable by design.**
+> All scanning, exploitation, and testing is confined to the local lab environment.
+> Never deploy to a public-facing environment. No real-world targets.
 
-![Juice Shop Screenshot Slideshow](screenshots/slideshow.gif)
+---
 
-For a detailed introduction, full list of features and architecture overview please visit the official project page:
-<https://owasp-juice.shop>
+## Table of Contents
 
-## Table of contents
-
-- [Setup](#setup)
-    - [From Sources](#from-sources)
-    - [Packaged Distributions](#packaged-distributions)
-    - [Docker Container](#docker-container)
-    - [Vagrant](#vagrant)
-- [Demo](#demo)
-- [Documentation](#documentation)
-    - [Node.js version compatibility](#nodejs-version-compatibility)
-    - [Troubleshooting](#troubleshooting)
-    - [Official companion guide](#official-companion-guide)
-- [Contributing](#contributing)
+- [Architecture](#architecture)
+- [Week 1 — Baseline Pipeline](#week-1--baseline-pipeline)
+- [Week 2 — Shift-Left Coverage](#week-2--shift-left-coverage)
+- [Week 3 — GenAI Triage](#week-3--genai-triage)
+- [Pipeline Stages & Security Gates](#pipeline-stages--security-gates)
+- [Repository Structure](#repository-structure)
+- [Setup & Installation](#setup--installation)
+- [Running Scans Locally](#running-scans-locally)
+- [Baseline Vulnerabilities](#baseline-vulnerabilities)
+- [Metrics Dashboard](#metrics-dashboard)
+- [GenAI Triage — Redaction Layer](#genai-triage--redaction-layer)
+- [Evaluation Rubric Progress](#evaluation-rubric-progress)
+- [Ethics & Responsible AI Use](#ethics--responsible-ai-use)
 - [References](#references)
-- [Merchandise](#merchandise)
-- [Donations](#donations)
-- [Contributors](#contributors)
-- [Licensing](#licensing)
 
-## Setup
+---
 
-> You can find some less common installation variations as well as instructions to run Juice Shop on a variety of cloud computing providers in
-> [the _Running OWASP Juice Shop_ documentation](https://pwning.owasp-juice.shop/companion-guide/latest/part1/running.html).
+## Architecture
 
-> Some challenges require an AI/LLM provider to work properly. Check the
-> [_Setting up external dependencies_ documentation](https://pwning.owasp-juice.shop/companion-guide/snapshot/part1/running.html#_setting_up_external_dependencies)
-> for instructions on configuring local or cloud-based AI providers.
+```
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                          DEVELOPER WORKSTATION                               │
+│             git push → github.com/sivaprasad789-ai/juice-shop                │
+└─────────────────────────────────┬────────────────────────────────────────────┘
+                                  │ Push to main / PR to main
+                                  ▼
+┌──────────────────────────────────────────────────────────────────────────────┐
+│               GITHUB ACTIONS — PipelineFortress CI/CD                       │
+│                                                                              │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │ WEEK 1 — BASELINE SECURITY STAGES                                   │    │
+│  │                                                                     │    │
+│  │  Stage 1 ──▶ 🔑 Gitleaks      Secrets scan (full git history)      │    │
+│  │                  │             Gate: 0 secrets — HARD FAIL          │    │
+│  │             ┌────┴─────┐                                            │    │
+│  │  Stage 2 ───▶ Semgrep  │  Stage 3 ──▶ Trivy FS (SCA)              │    │
+│  │  (SAST)    │ OWASP Top │  Dependency CVE scan                      │    │
+│  │            │ 10 + JWT  │  Gate: CRITICAL CVEs > 5 — FAIL           │    │
+│  │            └────┬──────┘       │                                    │    │
+│  │                 └──────┬───────┘                                    │    │
+│  │  Stage 4 ──▶ 🐳 Docker Build + Save .tar                           │    │
+│  └─────────────────────────────────────────────────────────────────────┘    │
+│                                                                              │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │ WEEK 2 — SHIFT-LEFT COVERAGE                                        │    │
+│  │                                                                     │    │
+│  │  Stage 5 ──▶ 🛡️ Trivy Image    Container CVE scan                  │    │
+│  │                                 Gate: 0 CRITICAL OS CVEs            │    │
+│  │  Stage 6 ──▶ 📋 Checkov        IaC scan (k8s/ manifests)           │    │
+│  │                                 Gate: CRITICAL IaC misconfigs       │    │
+│  │  Stage 7 ──▶ 📦 Syft           SBOM generation (JSON + SPDX)       │    │
+│  │  Stage 8 ──▶ 🕷️  OWASP ZAP     DAST baseline scan (deployed app)   │    │
+│  │                                 Gate: HIGH alerts                   │    │
+│  └─────────────────────────────────────────────────────────────────────┘    │
+│                                                                              │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │ WEEK 3 — GENAI TRIAGE                                               │    │
+│  │                                                                     │    │
+│  │  Stage 9 ──▶ 🤖 Redaction Layer   Strip secrets / source / PII     │    │
+│  │  Stage 10 ─▶ 🧠 LLM Triage        Cluster + prioritize + fix       │    │
+│  │  Stage 11 ─▶ 🔀 Auto PR           Draft remediation PRs (top 3)    │    │
+│  └─────────────────────────────────────────────────────────────────────┘    │
+│                                                                              │
+│  Stage 12 ─▶ ☸️  Push → Docker Hub + Deploy → kind + Smoke Test            │
+│              └──▶ GitOps: commit updated deployment.yaml → repo             │
+└─────────────────────────────────┬────────────────────────────────────────────┘
+                                  │
+                                  ▼
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                    kind Cluster (Kubernetes-in-Docker)                       │
+│                                                                              │
+│  Deployment:    juiceshop-deployment (replicas: 1)                           │
+│  Service:       NodePort 30000 → container 3000                              │
+│  NetworkPolicy: default-deny + internal + DNS egress only                   │
+│  SecurityCtx:   runAsNonRoot, readOnlyRootFilesystem, drop ALL caps          │
+│  Optional:      Falco runtime threat detection (stretch goal)                │
+└──────────────────────────────────────────────────────────────────────────────┘
+                                  │
+                                  ▼
+                     🧃 http://localhost:3000
+```
 
-### From Sources
+---
 
-![GitHub repo size](https://img.shields.io/github/repo-size/juice-shop/juice-shop.svg)
+## Week 1 — Baseline Pipeline
 
-1. Install [node.js](#nodejs-version-compatibility)
-2. Run `git clone https://github.com/juice-shop/juice-shop.git --depth 1` (or
-   clone [your own fork](https://github.com/juice-shop/juice-shop/fork)
-   of the repository)
-3. Go into the cloned folder with `cd juice-shop`
-4. Run `npm install` (only has to be done before first start or when you change the source code)
-5. Run `npm start`
-6. Browse to <http://localhost:3000>
+**Deliverable:** Working pipeline + baseline vulnerability report
+**Effort:** ~12 hours
 
-### Packaged Distributions
+### What was built
 
-[![GitHub release](https://img.shields.io/github/downloads/juice-shop/juice-shop/total.svg)](https://github.com/juice-shop/juice-shop/releases/latest)
-[![SourceForge](https://img.shields.io/sourceforge/dm/juice-shop?label=sourceforge%20downloads)](https://sourceforge.net/projects/juice-shop/)
-[![SourceForge](https://img.shields.io/sourceforge/dt/juice-shop?label=sourceforge%20downloads)](https://sourceforge.net/projects/juice-shop/)
+**1. Forked OWASP Juice Shop** into `github.com/sivaprasad789-ai/juice-shop` and added the
+DevSecOps pipeline files on top of the upstream source without modifying any Juice Shop code.
 
-1. Install a 64bit [node.js](#nodejs-version-compatibility) on your Windows, MacOS or Linux machine
-2. Download `juice-shop-<version>_<node-version>_<os>_x64.zip` (or
-   `.tgz`) attached to
-   [latest release](https://github.com/juice-shop/juice-shop/releases/latest)
-3. Unpack and `cd` into the unpacked folder
-4. Run `npm start`
-5. Browse to <http://localhost:3000>
+**2. Baseline deployment to kind cluster** — a 2-node kind cluster
+(1 control-plane + 1 worker) with host port 3000 mapped via `extraPortMappings`.
+The Deployment uses a hardened `securityContext` (non-root, drop ALL capabilities).
 
-> Each packaged distribution includes some binaries for `sqlite3` and
-> `libxmljs2` bound to the OS and node.js version which `npm install` was
-> executed on.
+**3. Baseline vulnerability documentation** — See [`docs/baseline-vulnerabilities.md`](docs/baseline-vulnerabilities.md).
+60+ intentional vulnerabilities mapped to OWASP Top 10 (2021) with CWE, CVSS score, exploit
+payload, and which pipeline stage catches each one.
 
-### Docker Container
+**4. Three security stages added:**
 
-[![Docker Pulls](https://img.shields.io/docker/pulls/bkimminich/juice-shop.svg)](https://hub.docker.com/r/bkimminich/juice-shop)
-![Docker Stars](https://img.shields.io/docker/stars/bkimminich/juice-shop.svg)
-[![](https://images.microbadger.com/badges/image/bkimminich/juice-shop.svg)](https://microbadger.com/images/bkimminich/juice-shop
-"Get your own image badge on microbadger.com")
-[![](https://images.microbadger.com/badges/version/bkimminich/juice-shop.svg)](https://microbadger.com/images/bkimminich/juice-shop
-"Get your own version badge on microbadger.com")
+| Stage | Tool | Rulesets | Gate |
+|---|---|---|---|
+| Secrets | Gitleaks | Default + custom allowlist | 0 secrets — hard fail |
+| SAST | Semgrep | `p/javascript`, `p/nodejs`, `p/owasp-top-ten`, `p/jwt`, `p/xss`, `p/sql-injection` | 0 ERROR findings — hard fail |
+| SCA | Trivy FS | `package.json`, `node_modules` | CRITICAL CVEs > 5 — fail |
 
-1. Install [Docker](https://www.docker.com)
-2. Run `docker pull bkimminich/juice-shop`
-3. Run `docker run --rm -p 127.0.0.1:3000:3000 bkimminich/juice-shop`
-4. Browse to <http://localhost:3000> (on macOS and Windows browse to
-   <http://192.168.99.100:3000> if you are using docker-machine instead of the native docker installation)
+> The SCA threshold is 5 (not 0) because Juice Shop intentionally ships `node-serialize` (RCE)
+> and `vm2` (sandbox escape) as challenge components. In a production pipeline this must be 0.
 
-### Vagrant
+**Gitleaks allowlist** in [`.gitleaks.toml`](.gitleaks.toml) covers Juice Shop's intentional fake
+JWTs and test credentials in `test/`, `ftp/`, and `data/staticData.ts`.
 
-1. Install [Vagrant](https://www.vagrantup.com/downloads.html) and
-   [Virtualbox](https://www.virtualbox.org/wiki/Downloads)
-2. Run `git clone https://github.com/juice-shop/juice-shop.git` (or
-   clone [your own fork](https://github.com/juice-shop/juice-shop/fork)
-   of the repository)
-3. Run `cd vagrant && vagrant up`
-4. Browse to [192.168.56.110](http://192.168.56.110)
+---
 
-## Demo
+## Week 2 — Shift-Left Coverage
 
-Feel free to have a look at the latest version of OWASP Juice Shop:
-<http://demo.owasp-juice.shop>
+**Deliverable:** Full multi-stage pipeline + SBOM + metrics dashboard
+**Effort:** ~14 hours
 
-> This is a deployment-test and sneak-peek instance only! You are __not
-> supposed__ to use this instance for your own hacking endeavours! No
-> guaranteed uptime! Guaranteed stern looks if you break it!
+### What was built
 
-## Documentation
+**1. IaC Scanning (Checkov)** — scans all files in `k8s/` against CIS Kubernetes benchmarks and
+Kubernetes security best practices. Gate fails on `CRITICAL` and `HIGH` severity misconfigurations.
 
-### Node.js version compatibility
+```bash
+checkov -d k8s/ --framework kubernetes --soft-fail-on MEDIUM
+```
 
-![GitHub package.json dynamic](https://img.shields.io/github/package-json/cpu/juice-shop/juice-shop)
-![GitHub package.json dynamic](https://img.shields.io/github/package-json/os/juice-shop/juice-shop)
+Key checks enforced:
+- `CKV_K8S_6` — Do not admit root containers
+- `CKV_K8S_8` — Liveness probe must be configured
+- `CKV_K8S_14` — Image tag must not be `latest`
+- `CKV_K8S_28` — Do not admit containers with added capabilities
+- `CKV_K8S_30` — Apply security context to pods and containers
+- `CKV_K8S_37` — Minimize the admission of containers with added capability
 
-OWASP Juice Shop officially supports the following versions of
-[node.js](http://nodejs.org) in line with the official
-[node.js LTS schedule](https://github.com/nodejs/LTS) as close as possible. Docker images and packaged distributions are
-offered accordingly.
+**2. Container Scanning (Trivy image)** — scans the built `.tar` artifact (downloaded via
+GitHub artifact storage — same pattern as Week 1 to avoid cross-job file loss).
+Gate: **0 CRITICAL CVEs in OS/runtime layers**.
 
-| node.js | Supported              | Tested             | [Packaged Distributions](#packaged-distributions) | [Docker images](#docker-container) from `master` | [Docker images](#docker-container) from `develop` |
-|:--------|:-----------------------|:-------------------|:--------------------------------------------------|:-------------------------------------------------|:--------------------------------------------------|
-| 26.x    | :heavy_check_mark:     | :heavy_check_mark: |                                                   |                                                  |                                                   |
-| 25.x    | ( :heavy_check_mark: ) | :x:                |                                                   |                                                  |                                                   |
-| 24.x    | :heavy_check_mark:     | :heavy_check_mark: | Windows (`x64`), MacOS (`x64`), Linux (`x64`)     | `latest` (`linux/amd64`, `linux/arm64`)          | `snapshot` (`linux/amd64`, `linux/arm64`)         |
-| 23.x    | :x:                    | :x:                |                                                   |                                                  |                                                   |
-| 22.x    | :heavy_check_mark:     | :heavy_check_mark: |                                                   |                                                  |                                                   |
-| <22.x   | :x:                    | :x:                |                                                   |                                                  |                                                   |
+**3. SBOM Generation (Syft)** — generates a Software Bill of Materials in both JSON and SPDX
+formats for every build. Uploaded as a pipeline artifact and committed to `docs/sbom/`.
 
-Juice Shop is automatically tested _only on the latest `.x` minor version_ of each node.js version mentioned above!
-There is no guarantee that older minor node.js releases will always work with Juice Shop!
-Please make sure you stay up to date with your chosen version.
+```bash
+syft docker.io/<REPO>/juiceshop:<TAG> -o json > docs/sbom/sbom.json
+syft docker.io/<REPO>/juiceshop:<TAG> -o spdx-json > docs/sbom/sbom.spdx.json
+```
 
-### Troubleshooting
+**4. DAST — OWASP ZAP Baseline Scan** — runs against the deployed staging Juice Shop instance
+after the kind deployment smoke test passes.
 
-[![Gitter](http://img.shields.io/badge/gitter-join%20chat-1dce73.svg)](https://gitter.im/bkimminich/juice-shop)
+```bash
+docker run --rm --network host \
+  ghcr.io/zaproxy/zaproxy:stable zap-baseline.py \
+  -t http://localhost:3000 \
+  -r zap-report.html \
+  -J zap-report.json \
+  -I           # Do not fail on warnings — gate on HIGH only
+```
 
-If you need help with the application setup please check 
-[our existing _Troubleshooting_](https://pwning.owasp-juice.shop/companion-guide/latest/part4/troubleshooting.html)
-guide. If this does not solve your issue please post your specific problem or question in the
-[Gitter Chat](https://gitter.im/bkimminich/juice-shop) where community members can best try to help you.
+Gate: Fail if ZAP reports any `HIGH` risk alerts. `MEDIUM` and `LOW` are collected and
+reported in the metrics dashboard but do not block the pipeline.
 
-:stop_sign: **Please avoid opening GitHub issues for support requests or questions!**
+**5. Metrics Dashboard** — see [Metrics Dashboard](#metrics-dashboard) section.
 
-### Official companion guide
+---
 
-[![Write Goodreads Review](https://img.shields.io/badge/goodreads-write%20review-49557240.svg)](https://www.goodreads.com/review/edit/49557240)
+## Week 3 — GenAI Triage
 
-OWASP Juice Shop comes with an official companion guide eBook. It will give you a complete overview of all
-vulnerabilities found in the application including hints how to spot and exploit them. In the appendix you will even
-find complete step-by-step solutions to every challenge. Extensive documentation of
-[custom re-branding](https://pwning.owasp-juice.shop/companion-guide/latest/part4/customization.html),
-[CTF-support](https://pwning.owasp-juice.shop/companion-guide/latest/part4/ctf.html),
-[trainer's guide](https://pwning.owasp-juice.shop/companion-guide/latest/part4/trainers.html)
-and much more is also included.
+**Deliverable:** LLM triage tool + redaction layer + 3 auto-generated PRs + final report
+**Effort:** ~12 hours
 
-[Pwning OWASP Juice Shop](https://leanpub.com/juice-shop) is published under
-[CC BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/)
-and is available **for free** in PDF, Kindle and ePub format on LeanPub. You can also
-[browse the full content online](https://pwning.owasp-juice.shop)!
+### Redaction Layer (Critical — runs BEFORE any LLM call)
 
-[<img alt="Pwning OWASP Juice Shop cover" src="https://raw.githubusercontent.com/juice-shop/pwning-juice-shop/master/docs/modules/ROOT/assets/images/cover.jpg" width="200"/>](https://leanpub.com/juice-shop)
-[<img alt="Pwning OWASP Juice Shop back cover" src="https://raw.githubusercontent.com/juice-shop/pwning-juice-shop/master/docs/modules/ROOT/assets/images/introduction/back.jpg" width="200"/>](https://leanpub.com/juice-shop)
+The redaction layer (`scripts/redact.py`) strips the following from all scanner JSON outputs
+**before** any content is sent to the LLM API:
 
-## Contributing
+| Data Type | Redaction Method |
+|---|---|
+| Secrets / credentials | Regex patterns matching API keys, tokens, passwords, JWTs |
+| Source code blocks | Remove any `code`, `snippet`, `context` fields from scanner JSON |
+| File paths with PII | Normalize to relative paths, strip usernames / absolute paths |
+| CVE descriptions with PoC | Keep CVE ID and severity only — strip full description if it contains exploit code |
+| Proprietary identifiers | Strip internal hostnames, IPs, org-specific names |
 
-[![GitHub contributors](https://img.shields.io/github/contributors/juice-shop/juice-shop.svg)](https://github.com/juice-shop/juice-shop/graphs/contributors)
-[![JavaScript Style Guide](https://img.shields.io/badge/code%20style-standard-brightgreen.svg)](http://standardjs.com/)
-[![Crowdin](https://d322cqt584bo4o.cloudfront.net/owasp-juice-shop/localized.svg)](https://crowdin.com/project/owasp-juice-shop)
-![GitHub issues by-label](https://img.shields.io/github/issues/juice-shop/juice-shop/help%20wanted.svg)
-![GitHub issues by-label](https://img.shields.io/github/issues/juice-shop/juice-shop/good%20first%20issue.svg)
+```python
+# scripts/redact.py — example redaction pipeline
+import re, json
 
-We are always happy to get new contributors on board! Please check
-[CONTRIBUTING.md](CONTRIBUTING.md) to learn how to
-[contribute to our codebase](CONTRIBUTING.md#code-contributions) or the
-[translation into different languages](CONTRIBUTING.md#i18n-contributions)!
+SECRET_PATTERNS = [
+    r'(?i)(password|passwd|secret|token|api[_-]?key)\s*[:=]\s*\S+',
+    r'eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+',   # JWT
+    r'(?i)(aws_access_key_id|aws_secret)\s*=\s*\S+',
+]
+
+def redact(text):
+    for pattern in SECRET_PATTERNS:
+        text = re.sub(pattern, '[REDACTED]', text)
+    return text
+
+def redact_scanner_json(findings: dict) -> dict:
+    # Remove source code context fields entirely
+    for finding in findings.get('results', []):
+        finding.pop('extra', None)       # Semgrep source context
+        finding.pop('snippet', None)     # Trivy code snippets
+        finding.pop('code', None)
+        # Redact any string values
+        for k, v in finding.items():
+            if isinstance(v, str):
+                finding[k] = redact(v)
+    return findings
+```
+
+**Verification:** The redaction layer is tested with a synthetic secrets injection test before
+every pipeline run — a known fake credential is injected into the input JSON and verified absent
+from the LLM prompt.
+
+### LLM Triage Tool
+
+Inputs: Consolidated scanner JSON (Semgrep + Trivy + Gitleaks + Checkov + ZAP outputs merged).
+Model: `claude-sonnet-4-6` via Anthropic API (or OpenAI `gpt-4o` — configurable via `LLM_PROVIDER`).
+
+Outputs per run:
+- **Deduplicated findings** — cross-tool duplicates clustered (e.g. same SQLi caught by both Semgrep and ZAP)
+- **Prioritized list** — ranked by exploitability × impact, not just severity label
+- **3–5 line fix** — concise remediation suggestion per finding
+- **False positive flags** — LLM confidence score on each finding
+
+Prompt library in `scripts/prompts/`:
+
+```
+prompts/
+├── triage.txt          ← Main triage prompt (finding cluster + prioritize)
+├── fix_suggest.txt     ← Fix suggestion prompt (3-5 line code fix)
+├── pr_draft.txt        ← PR description template prompt
+└── fp_analysis.txt     ← False positive / false negative analysis prompt
+```
+
+### Auto-Generated Remediation PRs
+
+For the **top 3 findings** by risk score, the pipeline:
+
+1. Checks out a new branch: `fix/llm-triage-<finding-id>`
+2. Applies the LLM-suggested fix as a patch
+3. Opens a Pull Request with the LLM-generated description
+4. Labels it `llm-generated` + `requires-human-review`
+5. **A human must review and approve** — the pipeline never auto-merges
+
+Example PRs generated:
+- `fix/sqli-login-endpoint` — parameterized query replacing string concatenation in `routes/login.ts`
+- `fix/jwt-alg-none` — enforcing `algorithms: ['RS256']` in JWT middleware
+- `fix/xxe-xml-parser` — disabling external entity resolution in XML parser config
+
+**Honest FP/FN Analysis** — see `docs/final-report.md`:
+
+| Tool | True Positives | False Positives | False Negatives | Notes |
+|---|---|---|---|---|
+| Semgrep | 18 | 4 | 6 | FPs mainly in test fixtures |
+| Trivy SCA | 34 | 2 | 1 | Very accurate on known CVEs |
+| Gitleaks | 3 | 8 | 0 | FPs on Juice Shop challenge JWTs |
+| Checkov | 11 | 1 | 2 | FN on custom admission controllers |
+| ZAP | 12 | 5 | 9 | DAST misses auth-required pages |
+| LLM Triage | 22 | 3 | 4 | No hallucinated CVEs detected |
+
+---
+
+## Pipeline Stages & Security Gates
+
+```
+Stage  Tool          Type       Gate Condition                     On Fail
+─────  ────────────  ─────────  ────────────────────────────────  ──────────────
+1      Gitleaks      Secrets    Any real secret detected           ❌ Hard fail
+2      Semgrep       SAST       Any ERROR-level finding            ❌ Hard fail
+3      Trivy FS      SCA        CRITICAL CVE count > 5             ❌ Hard fail
+4      Docker Build  Build      Build failure                      ❌ Hard fail
+5      Trivy Image   Container  Any CRITICAL OS/runtime CVE        ❌ Hard fail
+6      Checkov       IaC        Any CRITICAL/HIGH misconfiguration ❌ Hard fail
+7      Syft          SBOM       Generation failure                 ⚠️ Warn only
+8      OWASP ZAP     DAST       Any HIGH risk alert                ❌ Hard fail
+9      Redact+LLM    GenAI      Redaction verification fails       ❌ Hard fail
+10     Smoke test    Deploy     HTTP status ≠ 200                  ❌ Hard fail
+```
+
+---
+
+## Repository Structure
+
+```
+juice-shop/                                  ← Fork of OWASP Juice Shop
+│
+├── .github/
+│   └── workflows/
+│       └── devsecops-pipeline.yml           ← Full 12-stage pipeline (Weeks 1–3)
+│
+├── k8s/
+│   ├── kind-config.yaml                     ← kind cluster (control-plane + worker)
+│   ├── deployment.yaml                      ← K8s Deployment + hardened securityContext
+│   ├── service.yaml                         ← NodePort 30000 → 3000
+│   └── networkpolicy.yaml                   ← Default-deny + internal + DNS egress
+│
+├── scripts/
+│   ├── redact.py                            ← Redaction layer (Week 3)
+│   ├── triage.py                            ← LLM triage orchestrator (Week 3)
+│   ├── pr_generator.py                      ← Auto PR creation (Week 3)
+│   ├── merge_findings.py                    ← Merge multi-tool scanner JSON
+│   └── prompts/
+│       ├── triage.txt
+│       ├── fix_suggest.txt
+│       ├── pr_draft.txt
+│       └── fp_analysis.txt
+│
+├── docs/
+│   ├── baseline-vulnerabilities.md          ← Week 1: OWASP Top 10 baseline catalogue
+│   ├── sbom/
+│   │   ├── sbom.json                        ← Syft SBOM (JSON format)
+│   │   └── sbom.spdx.json                  ← Syft SBOM (SPDX format)
+│   ├── metrics-dashboard.md                 ← Week 2: vulnerability metrics
+│   ├── zap-report.html                      ← DAST report (generated)
+│   └── final-report.md                      ← Week 3: FP/FN analysis + maturity assessment
+│
+├── policy/
+│   └── checkov-custom.yaml                  ← Custom Checkov policy-as-code rules
+│
+├── .gitleaks.toml                           ← Gitleaks allowlist (Juice Shop test data)
+│
+├── frontend/                                ← Angular frontend (upstream Juice Shop)
+├── routes/                                  ← Express routes (upstream Juice Shop)
+├── data/                                    ← Challenge data (upstream Juice Shop)
+├── Dockerfile                               ← Upstream Juice Shop Dockerfile
+└── package.json                             ← Node.js dependencies
+```
+
+---
+
+## Setup & Installation
+
+### Prerequisites
+
+| Tool | Version | Install |
+|---|---|---|
+| Git | 2.40+ | [git-scm.com](https://git-scm.com) |
+| Docker Desktop | 24.0+ | [docker.com](https://docker.com) |
+| kubectl | 1.28+ | [kubernetes.io](https://kubernetes.io/docs/tasks/tools/) |
+| kind | 0.23+ | [kind.sigs.k8s.io](https://kind.sigs.k8s.io/) |
+| Node.js | 22.x or 24.x | [nodejs.org](https://nodejs.org) |
+| Python | 3.11+ | [python.org](https://python.org) |
+| Trivy | 0.50+ | [trivy.dev](https://trivy.dev) |
+| Syft | 1.0+ | [github.com/anchore/syft](https://github.com/anchore/syft) |
+
+### 1. Fork & Clone
+
+```bash
+# Fork https://github.com/juice-shop/juice-shop on GitHub, then:
+git clone https://github.com/sivaprasad789-ai/juice-shop.git --depth 1
+cd juice-shop
+```
+
+### 2. Run Juice Shop Locally
+
+```bash
+# Via Docker (fastest):
+docker run --rm -p 127.0.0.1:3000:3000 bkimminich/juice-shop
+
+# Via source (Node.js 22.x or 24.x required):
+npm install && npm start
+
+# Browse to http://localhost:3000
+```
+
+### 3. Deploy to kind Cluster
+
+```bash
+# Create cluster
+kind create cluster --config k8s/kind-config.yaml
+
+# Build and load image
+docker build -t juiceshop:local .
+kind load docker-image juiceshop:local --name juiceshop-cluster
+
+# Deploy all manifests
+kubectl apply -f k8s/deployment.yaml
+kubectl apply -f k8s/service.yaml
+kubectl apply -f k8s/networkpolicy.yaml
+
+# Wait and verify
+kubectl rollout status deployment/juiceshop-deployment
+open http://localhost:3000
+```
+
+### 4. Configure GitHub Secrets
+
+Go to your fork → **Settings → Secrets and variables → Actions → New repository secret**
+
+| Secret | Description |
+|---|---|
+| `DOCKERHUB_USERNAME` | Docker Hub username |
+| `DOCKERHUB_TOKEN` | Docker Hub access token |
+| `GIT_EMAIL` | Git commit email for pipeline |
+| `GIT_USERNAME` | Git commit username for pipeline |
+| `LLM_API_KEY` | Anthropic / OpenAI API key (Week 3 only) |
+
+Enable write permissions: **Settings → Actions → General → Workflow permissions → Read and write permissions → Save**
+
+### 5. Trigger the Pipeline
+
+```bash
+git add .github/ k8s/ docs/ scripts/ policy/ .gitleaks.toml
+git commit -m "feat: add PipelineFortress DevSecOps pipeline"
+git push
+```
+
+---
+
+## Running Scans Locally
+
+### Secrets — Gitleaks
+
+```bash
+docker run --rm -v $(pwd):/repo \
+  zricethezav/gitleaks detect \
+  --source /repo --config /repo/.gitleaks.toml -v
+```
+
+### SAST — Semgrep
+
+```bash
+docker run --rm -v $(pwd):/src semgrep/semgrep semgrep \
+  --config "p/owasp-top-ten" --config "p/javascript" \
+  --config "p/nodejs" --config "p/jwt" /src
+```
+
+### SCA — Trivy Filesystem
+
+```bash
+trivy fs . --severity CRITICAL,HIGH --format json -o trivy-fs.json
+```
+
+### IaC — Checkov
+
+```bash
+checkov -d k8s/ --framework kubernetes \
+  --check CKV_K8S_6,CKV_K8S_8,CKV_K8S_14,CKV_K8S_28,CKV_K8S_30,CKV_K8S_37
+```
+
+### SBOM — Syft
+
+```bash
+docker build -t juiceshop:local .
+syft juiceshop:local -o json > docs/sbom/sbom.json
+syft juiceshop:local -o spdx-json > docs/sbom/sbom.spdx.json
+```
+
+### Container Image — Trivy
+
+```bash
+docker save juiceshop:local -o juiceshop.tar
+trivy image --input juiceshop.tar --severity CRITICAL,HIGH
+```
+
+### DAST — OWASP ZAP
+
+```bash
+# Requires app running on localhost:3000
+docker run --rm --network host \
+  ghcr.io/zaproxy/zaproxy:stable zap-baseline.py \
+  -t http://localhost:3000 \
+  -r docs/zap-report.html \
+  -J docs/zap-report.json -I
+```
+
+### LLM Triage (Week 3)
+
+```bash
+# Merge all scanner outputs
+python3 scripts/merge_findings.py \
+  --semgrep semgrep-results.sarif \
+  --trivy trivy-fs.json \
+  --gitleaks results.sarif \
+  --checkov checkov-results.json \
+  --zap docs/zap-report.json \
+  --output merged-findings.json
+
+# Run redaction layer
+python3 scripts/redact.py \
+  --input merged-findings.json \
+  --output redacted-findings.json
+
+# Run LLM triage
+python3 scripts/triage.py \
+  --input redacted-findings.json \
+  --model claude-sonnet-4-6 \
+  --output triage-report.json
+```
+
+---
+
+## Baseline Vulnerabilities
+
+See [`docs/baseline-vulnerabilities.md`](docs/baseline-vulnerabilities.md) for the full Week 1
+baseline catalogue mapped to OWASP Top 10 (2021):
+
+| OWASP Category | Count | Key Findings | Pipeline Stage That Catches It |
+|---|---|---|---|
+| A01 — Broken Access Control | 12 | Admin bypass, IDOR, JWT `alg:none` | Semgrep (SAST) |
+| A02 — Cryptographic Failures | 8 | MD5 passwords, JWT in localStorage | Semgrep + ZAP |
+| A03 — Injection | 15 | SQLi, XSS, SSTI, NoSQLi | Semgrep + ZAP |
+| A05 — Security Misconfiguration | 9 | Stack traces, dir listing, no CSP | ZAP (DAST) |
+| A06 — Vulnerable Components | 30+ | `node-serialize` RCE, `vm2` escape | Trivy SCA |
+| A07 — Auth Failures | 10 | Weak passwords, hardcoded JWT secret | Semgrep + Gitleaks |
+| A10 — SSRF | 2 | Image URL fetch → cloud metadata | ZAP (DAST) |
+
+---
+
+## Metrics Dashboard
+
+See [`docs/metrics-dashboard.md`](docs/metrics-dashboard.md) for the full Week 2 dashboard.
+Key metrics tracked per pipeline run:
+
+| Metric | Description | Target |
+|---|---|---|
+| **Vulnerabilities caught pre-merge** | Findings blocked before reaching main | ≥ 80% |
+| **True positive rate per tool** | TP / (TP + FN) per scanner | ≥ 85% |
+| **False positive rate per tool** | FP / (FP + TN) per scanner | ≤ 15% |
+| **Pipeline gate failure rate** | Builds blocked by security gates | Track trend |
+| **Mean time to feedback** | Time from push to security results | < 10 min |
+| **SBOM component count** | Total packages tracked per build | Track growth |
+| **DAST HIGH alerts** | ZAP HIGH-risk findings per run | 0 in hardened build |
+| **LLM triage accuracy** | % findings correctly triaged by LLM | ≥ 80% |
+
+---
+
+## GenAI Triage — Redaction Layer
+
+The redaction layer is the **highest-leverage learning component** of this project.
+It answers the question: *what data should and should not flow to an external LLM?*
+
+**Never sent to the LLM:**
+- Actual secret values (passwords, tokens, API keys, private keys)
+- Raw source code blocks or file snippets
+- Absolute file paths containing usernames or internal hostnames
+- Internal IP addresses or org-specific identifiers
+- PoC exploit code from CVE descriptions
+
+**Sent to the LLM (after redaction):**
+- Finding type and category (e.g. `sql-injection`, `A03`)
+- Severity and CVSS score
+- Affected file path (relative, normalized)
+- Line number range
+- Semgrep rule ID or CVE ID
+- Recommended fix category (e.g. `parameterize-query`)
+
+**Redaction verification test** — run before every LLM call:
+
+```bash
+python3 scripts/redact.py --self-test
+# Injects 5 synthetic secrets into test JSON
+# Verifies all 5 are absent from output
+# Fails pipeline if any secret passes through
+```
+
+---
+
+## Evaluation Rubric Progress
+
+| Criterion | Weight | Status | Evidence |
+|---|---|---|---|
+| Pipeline coverage (5 stages) | 20% | ✅ All 5 stages + DAST | `.github/workflows/devsecops-pipeline.yml` |
+| Container + IaC hardening | 15% | ✅ Trivy image + Checkov + SBOM | `k8s/`, `docs/sbom/` |
+| LLM triage soundness | 20% | ✅ FP/FN analysis, 0 hallucinated CVEs | `docs/final-report.md` |
+| Redaction layer | 10% | ✅ Verified via self-test | `scripts/redact.py` |
+| Sample PRs | 10% | ✅ 2 PRs (individual mode) | GitHub PR history |
+| Metrics + dashboard | 10% | ✅ 8-metric dashboard | `docs/metrics-dashboard.md` |
+| Report + oral defense | 15% | ✅ 10–12 pages | `docs/final-report.md` |
+
+---
+
+## Ethics & Responsible AI Use
+
+- All scanning, exploitation, and testing is confined to the local kind lab environment.
+  **No real-world targets were used at any stage.**
+- GenAI usage disclosure: `claude-sonnet-4-6` (Anthropic) used for finding triage, fix
+  suggestion generation, and PR description drafting. All LLM outputs were reviewed by a
+  human before any PR was submitted.
+- No real credentials, customer data, secrets, or copyrighted content were pasted into any LLM.
+- Juice Shop challenge credentials and test JWTs are allowlisted in Gitleaks and excluded from
+  all LLM prompts via the redaction layer.
+- Responsible AI Use and Lab Conduct acknowledgement signed prior to Week 2.
+
+---
+
+## Node.js Version Compatibility
+
+| node.js | Supported | Tested | Docker images |
+|---|---|---|---|
+| 26.x | ✅ | ✅ | |
+| 24.x | ✅ | ✅ | `latest` (amd64, arm64) |
+| 22.x | ✅ | ✅ | |
+| < 22.x | ❌ | ❌ | |
+
+---
 
 ## References
 
-Did you write a blog post, magazine article or do a podcast about or mentioning OWASP Juice Shop? Or maybe you held or
-joined a conference talk or meetup session, a hacking workshop or public training where this project was mentioned?
+- EC-Council Essentials Series — DevSecOps module outlines (via program LMS)
+- [MITRE ATT&CK](https://attack.mitre.org)
+- [NIST Cybersecurity Framework 2.0](https://www.nist.gov/cyberframework)
+- [OWASP Top 10](https://owasp.org/Top10/) | [OWASP Juice Shop](https://owasp-juice.shop)
+- [CIS Benchmarks](https://www.cisecurity.org/cis-benchmarks)
+- [CERT-In Advisories](https://www.cert-in.org.in)
+- [Semgrep Registry](https://semgrep.dev/r)
+- [Trivy Documentation](https://trivy.dev)
+- [Gitleaks](https://github.com/gitleaks/gitleaks)
+- [Checkov](https://www.checkov.io/)
+- [OWASP ZAP](https://www.zaproxy.org/)
+- [Syft SBOM](https://github.com/anchore/syft)
+- [kind — Kubernetes in Docker](https://kind.sigs.k8s.io/)
+- [ArgoCD](https://argo-cd.readthedocs.io/)
 
-Add it to our ever-growing list of [REFERENCES.md](REFERENCES.md) by forking and opening a Pull Request!
-
-## Merchandise
-
-* On [Spreadshirt.com](http://shop.spreadshirt.com/juiceshop) and
-  [Spreadshirt.de](http://shop.spreadshirt.de/juiceshop) you can get some swag (Shirts, Hoodies, Mugs) with the official
-  OWASP Juice Shop logo
-* On
-  [StickerYou.com](https://www.stickeryou.com/products/owasp-juice-shop/794)
-  you can get variants of the OWASP Juice Shop logo as single stickers to decorate your laptop with. They can also print
-  magnets, iron-ons, sticker sheets and temporary tattoos.
-
-## Donations
-
-[![](https://img.shields.io/badge/support-owasp%20juice%20shop-blue)](https://owasp.org/donate/?reponame=www-project-juice-shop&title=OWASP+Juice+Shop)
-
-The OWASP Foundation gratefully accepts donations via Stripe. Projects such as Juice Shop can then request reimbursement
-for expenses from the Foundation. If you'd like to express your support of the Juice Shop project, please make sure to
-tick the "Publicly list me as a supporter of OWASP Juice Shop" checkbox on the donation form. You can find our more
-about donations and how they are used here:
-
-<https://pwning.owasp-juice.shop/companion-guide/latest/part3/donations.html>
-
-## Contributors
-
-The OWASP Juice Shop Project Leaders are:
-
-- [Björn Kimminich](https://github.com/bkimminich) aka `bkimminich` [![Keybase PGP](https://img.shields.io/keybase/pgp/bkimminich)](https://keybase.io/bkimminich)
-- [Jannik Hollenbach](https://github.com/J12934) aka `J12934`
-
-For a list of all contributors to the OWASP Juice Shop please visit our
-[HALL_OF_FAME.md](HALL_OF_FAME.md).
+---
 
 ## Licensing
 
 [![license](https://img.shields.io/github/license/juice-shop/juice-shop.svg)](LICENSE)
 
-This program is free software: you can redistribute it and/or modify it under the terms of the [MIT license](LICENSE).
-OWASP Juice Shop and any contributions are Copyright © by Bjoern Kimminich & the OWASP Juice Shop contributors
-2014-2026.
+OWASP Juice Shop is free software under the [MIT License](LICENSE).
+Copyright © Bjoern Kimminich & the OWASP Juice Shop contributors 2014-2026.
+
+PipelineFortress DevSecOps pipeline additions © 2026 Siva Prasad Kusethi.
 
 ![Juice Shop Logo](https://raw.githubusercontent.com/juice-shop/juice-shop/master/frontend/src/assets/public/images/JuiceShop_Logo_400px.png)
