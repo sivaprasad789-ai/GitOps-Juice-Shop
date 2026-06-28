@@ -17,7 +17,7 @@ name: "PipelineFortress — SAST + Secrets + SCA + Build + Image Scan + IaC + SB
 on:
   push:
     branches:
-      - main  # Only trigger on pushes to the main branch, not feature branches
+      - master  # Only trigger on pushes to the main branch, not feature branches
 
 # ── Global environment variables available to ALL jobs in this workflow ────────
 env:
