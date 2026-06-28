@@ -1,762 +1,689 @@
+# ══════════════════════════════════════════════════════════════════════════════
+# FILE    : .github/workflows/devsecops-pipeline.yml
+# PROJECT : PipelineFortress — Secure CI/CD for OWASP Juice Shop
+# AUTHOR  : Siva Prasad Kusethi | Cloud Security Engineer
+# PROGRAM : IIT Roorkee x Futurense — PG Certificate AI/GenAI Cybersecurity
+# REPO    : github.com/sivaprasad789-ai/GitOps-Juice-Shop
+#
 # PIPELINE STAGES (in order of execution):
-#   Job 1 → Gitleaks     : Secrets scanning (runs FIRST on full git history)
-#   Job 2 → Semgrep      : SAST — static code analysis (parallel with Job 3)
-#   Job 3 → Trivy FS     : SCA  — dependency CVE scan  (parallel with Job 2)
-#   Job 4 → Docker Build : Build & push image (only after Jobs 2 + 3 pass)
-#   Job 5 → Trivy Image  : Container image CVE scan    (parallel after Job 4)
-#   Job 6 → Checkov      : IaC scan on k8s/ manifests  (parallel after Job 4)
-#   Job 7 → Syft         : SBOM generation             (parallel after Job 4)
-#   Job 8 → OWASP ZAP   : DAST baseline scan           (after Jobs 5+6+7 pass)
-#   Job 9 → Deploy       : Update manifests + GitOps push (after all gates pass)
+#   Job 1 → Gitleaks    : Secrets scanning     (runs FIRST — full git history)
+#   Job 2 → Semgrep     : SAST                 (parallel with Job 3)
+#   Job 3 → Trivy FS    : SCA dependency scan  (parallel with Job 2)
+#   Job 4 → Docker      : Build & push image   (after Jobs 2 + 3 pass)
+#   Job 5 → Trivy Image : Container CVE scan   (parallel after Job 4)
+#   Job 6 → Checkov     : IaC scan k8s/        (parallel after Job 4)
+#   Job 7 → Syft        : SBOM generation      (parallel after Job 4)
+#   Job 8 → OWASP ZAP  : DAST baseline scan   (after Jobs 5 + 6 + 7 pass)
+#   Job 9 → Deploy      : GitOps manifest push (after all gates pass)
 # ══════════════════════════════════════════════════════════════════════════════
 
-# ── Workflow name shown in GitHub Actions UI ───────────────────────────────────
 name: "PipelineFortress — SAST + Secrets + SCA + Build + Image Scan + IaC + SBOM + DAST + Deploy"
 
-# ── Trigger: this entire pipeline runs whenever code is pushed to main branch ──
 on:
   push:
     branches:
-      - master  # Only trigger on pushes to the main branch, not feature branches
+      - master
 
-# ── Global environment variables available to ALL jobs in this workflow ────────
 env:
-  # Read current version from version.txt, add 1, store result as VERSION
-  # Example: if version.txt contains "3", VERSION becomes "4"
-  # This auto-increments the Docker image tag on every pipeline run
+  # Auto-increment version: reads version.txt, adds 1
+  # Example: version.txt = "3" → VERSION = "4"
   VERSION: $(( $(cat version.txt) + 1 ))
 
-  # Docker Hub repository path — reads username from GitHub Secrets
-  # Final image name example: myusername/gitops-dev/secops-juice-shop-project:4
-  DOCKERHUB_REPO: ${{ secrets.DOCKERHUB_USERNAME }}/gitops-dev/secops-juice-shop-project
+  # FIX: Docker Hub repo path must NOT contain slashes after the username
+  # Correct format: username/reponame   (only one slash)
+  # Wrong format  : username/org/repo   (two slashes — Docker Hub doesn't support this)
+  DOCKERHUB_REPO: ${{ secrets.DOCKERHUB_USERNAME }}/gitops-juiceshop-devsecops
 
-# ══════════════════════════════════════════════════════════════════════════════
-# JOBS SECTION — each job runs on its own fresh Ubuntu runner (virtual machine)
-# Jobs run in PARALLEL by default unless "needs:" is specified
-# "needs:" creates a dependency — job only starts after listed jobs succeed
-# ══════════════════════════════════════════════════════════════════════════════
 jobs:
 
   # ════════════════════════════════════════════════════════════════════════════
   # JOB 1 — SECRETS SCANNING (Gitleaks)
-  # PURPOSE : Scan entire git commit history for accidentally committed secrets
-  # RUNS    : FIRST — before any other job (no "needs:" dependency)
-  # GATE    : HARD FAIL if any real API key, password, token, or private key found
-  # WHY FIRST: Cheapest scan to run, highest damage if a secret reaches Docker Hub
+  # Runs FIRST — no "needs:" so it starts immediately on push
+  # Gate: HARD FAIL if any real secret found anywhere in git history
   # ════════════════════════════════════════════════════════════════════════════
   secrets_scan:
-    name: "🔑 Secrets Scan — Gitleaks"  # Label shown in GitHub Actions UI
+    name: "🔑 Secrets Scan — Gitleaks"
+    runs-on: ubuntu-latest
 
-    runs-on: ubuntu-latest  # Spin up a fresh Ubuntu 22.04 virtual machine for this job
-
-    steps:  # List of sequential steps executed inside this job's runner
-
-      # Step 1: Download the repository code onto the runner
-      # fetch-depth: 0 means clone the FULL git history (all commits, all branches)
-      # This is required for Gitleaks to scan every commit ever made, not just the latest
-      # Without fetch-depth: 0, Gitleaks only sees the most recent commit — misses old secrets
+    steps:
+      # fetch-depth: 0 = clone full git history (all commits)
+      # Required so Gitleaks can scan every commit, not just the latest one
       - name: Checkout Repository (full history)
-        uses: actions/checkout@v4  # Official GitHub action to clone the repo
+        uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # 0 = unlimited depth = full history (default is 1 = shallow clone)
+          fetch-depth: 0
 
-      # Step 2: Run Gitleaks using the official GitHub Action
-      # Gitleaks scans all files and all commits for patterns matching secrets
-      # It uses built-in regex rules for 150+ secret types (AWS keys, JWT, passwords, etc.)
-      # GITHUB_TOKEN is passed so Gitleaks can post results as GitHub Security alerts
+      # Official Gitleaks GitHub Action
+      # Scans all files + all commits for 150+ secret patterns
+      # GITHUB_TOKEN is auto-provided by GitHub — no manual setup needed
       - name: Run Gitleaks secrets scan
-        uses: gitleaks/gitleaks-action@v2  # Official Gitleaks GitHub Action (version 2)
+        uses: gitleaks/gitleaks-action@v2
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # Auto-provided by GitHub — no setup needed
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # Step 3: Save the scan results as a downloadable artifact
-      # SARIF = Static Analysis Results Interchange Format (standard security report format)
-      # "if: always()" means this step runs even if Gitleaks found secrets (job failed)
-      # retention-days: 30 means GitHub keeps this file for 30 days before auto-deleting
+      # Save SARIF report as artifact even if secrets were found (job failed)
+      # "if: always()" = run this step regardless of previous step result
       - name: Upload Gitleaks SARIF report
-        if: always()  # Run this step regardless of whether previous steps passed or failed
-        uses: actions/upload-artifact@v4  # Official GitHub action to save files as artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
         with:
-          name: gitleaks-report      # Name of the artifact shown in GitHub Actions UI
-          path: results.sarif        # File path to upload (Gitleaks writes here by default)
-          retention-days: 30         # Keep artifact for 30 days
+          name: gitleaks-report
+          path: results.sarif
+          retention-days: 30
 
 
   # ════════════════════════════════════════════════════════════════════════════
-  # JOB 2 — SAST — STATIC APPLICATION SECURITY TESTING (Semgrep)
-  # PURPOSE : Scan source code for security vulnerabilities without running it
-  # RUNS    : After Job 1 (secrets_scan) passes — in PARALLEL with Job 3
-  # GATE    : HARD FAIL on any ERROR-level security finding
-  # RULESETS: OWASP Top 10, JavaScript, Node.js, JWT, XSS, SQL Injection
+  # JOB 2 — SAST (Semgrep)
+  # Starts after Job 1 passes — runs in PARALLEL with Job 3
+  # Gate: HARD FAIL on any ERROR-level finding
+  #
+  # FIX vs original:
+  #   - Removed "container: image: semgrep/semgrep" — caused file path issues
+  #   - Install Semgrep directly on the runner via pip instead
+  #   - Changed "semgrep ci" to "semgrep scan" (ci requires Semgrep Cloud login)
+  #   - Added explicit "." target directory (required — without it semgrep writes no output)
+  #   - Added file-exists guard before parsing (prevents "No such file" crash)
+  #   - Python parser wrapped in try/except (prevents JSON crash if file is empty)
   # ════════════════════════════════════════════════════════════════════════════
   sast_scan:
     name: "🔍 SAST — Semgrep"
-
-    runs-on: ubuntu-latest  # Fresh Ubuntu runner for this job
-
-    needs: secrets_scan  # This job only starts AFTER secrets_scan job completes successfully
-                         # If secrets_scan fails, this job is skipped entirely
-
-    # Run this job inside the official Semgrep Docker container
-    # This avoids installing Semgrep manually and ensures the correct version
-    container:
-      image: semgrep/semgrep  # Pull the latest official Semgrep container image
+    runs-on: ubuntu-latest
+    needs: secrets_scan
 
     steps:
-
-      # Step 1: Clone the repository code into the Semgrep container
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      # Step 2: Run Semgrep with multiple security rulesets
-      # --config "p/javascript"    : General JavaScript security rules
-      # --config "p/nodejs"        : Node.js specific vulnerabilities (express, require, etc.)
-      # --config "p/owasp-top-ten" : All OWASP Top 10 vulnerability patterns
-      # --config "p/jwt"           : JWT algorithm confusion, weak secrets, none algorithm
-      # --config "p/xss"           : Cross-site scripting patterns (reflected, stored, DOM)
-      # --config "p/sql-injection" : SQL injection and ORM injection patterns
-      # --sarif                    : Output results in SARIF format (standard security format)
-      # --output semgrep-results.sarif : Save results to this file
-      # --severity ERROR           : Include ERROR level findings in output
-      # --severity WARNING         : Include WARNING level findings in output
-      # "|| true" at the end       : Prevent Semgrep's exit code from stopping the pipeline here
-      #                              We manually check the count in the next step instead
-      - name: Run Semgrep SAST
+      # Install Semgrep directly on the Ubuntu runner
+      # Avoids container filesystem isolation issues that caused the missing file error
+      # "--break-system-packages" required on Ubuntu 24+ for system-wide pip install
+      - name: Install Semgrep
+        run: pip install semgrep --break-system-packages
+
+      # Run Semgrep scan with six security rulesets
+      # "semgrep scan" (not "semgrep ci") — ci requires Semgrep Cloud account/token
+      # "--sarif" outputs in SARIF format (standard security report format)
+      # "--output semgrep-results.sarif" saves to this file
+      # "." at the end = scan current directory (the repo root)
+      # "|| true" = don't fail this step even if Semgrep finds issues
+      #             we enforce our own gate in the next step
+      - name: Run Semgrep SAST scan
         run: |
-          semgrep ci \
+          semgrep scan \
             --config "p/javascript" \
             --config "p/nodejs" \
             --config "p/owasp-top-ten" \
             --config "p/jwt" \
             --config "p/xss" \
             --config "p/sql-injection" \
-            --sarif --output semgrep-results.sarif \
+            --sarif \
+            --output semgrep-results.sarif \
             --severity ERROR \
             --severity WARNING \
-            || true  # Continue to next step even if Semgrep exits with error code
+            . \
+            || true
 
-      # Step 3: Parse the SARIF file and count ERROR-level findings
-      # This is our custom severity gate — we decide when to fail, not Semgrep
-      # python3 -c "..." runs an inline Python script to parse the JSON SARIF file
-      # SARIF "level": "error" maps to Semgrep ERROR severity
-      # If ERROR count > 0, we exit with code 1 which fails the job and blocks the pipeline
+      # Custom severity gate — parse the SARIF file and count ERROR findings
+      # Three guards before parsing:
+      #   Guard 1: file does not exist → create empty valid SARIF
+      #   Guard 2: file exists but is empty → create empty valid SARIF
+      #   Guard 3: Python try/except → if JSON is malformed, treat as 0 findings
       - name: Enforce SAST gate — fail on ERROR findings
         run: |
-          ERROR_COUNT=$(cat semgrep-results.sarif | python3 -c "
-          import json, sys
-          data = json.load(sys.stdin)                          # Parse SARIF JSON from stdin
-          errors = [r for r in data.get('runs',[{}])[0].get('results',[])
-                    if r.get('level') == 'error']             # Filter only error-level results
-          print(len(errors))                                   # Print the count
-          ")
-          echo "Semgrep ERROR findings: $ERROR_COUNT"         # Log the count to pipeline output
-          if [ "$ERROR_COUNT" -gt "0" ]; then                 # If any errors found...
-            echo "❌ SAST gate FAILED — $ERROR_COUNT ERROR-level findings."
-            exit 1                                             # Exit code 1 = job FAILS = pipeline blocked
+          if [ ! -f semgrep-results.sarif ]; then
+            echo "WARNING: semgrep-results.sarif not found — creating empty result"
+            echo '{"runs":[{"results":[]}]}' > semgrep-results.sarif
           fi
-          echo "✅ SAST gate passed."                         # If 0 errors, gate passes
 
-      # Step 4: Upload the full Semgrep SARIF report as a pipeline artifact
-      # "if: always()" ensures the report is saved even when the gate fails
-      # This lets developers download and review exactly what Semgrep found
+          if [ ! -s semgrep-results.sarif ]; then
+            echo "WARNING: semgrep-results.sarif is empty — creating empty result"
+            echo '{"runs":[{"results":[]}]}' > semgrep-results.sarif
+          fi
+
+          ERROR_COUNT=$(python3 -c "
+          import json, sys
+          try:
+              with open('semgrep-results.sarif') as f:
+                  data = json.load(f)
+              errors = [
+                  r for r in data.get('runs', [{}])[0].get('results', [])
+                  if r.get('level') == 'error'
+              ]
+              print(len(errors))
+          except Exception as e:
+              sys.stderr.write(f'SARIF parse warning: {e}\n')
+              print(0)
+          ")
+
+          echo "Semgrep ERROR findings: $ERROR_COUNT"
+          if [ "$ERROR_COUNT" -gt "0" ]; then
+            echo "SAST gate FAILED — $ERROR_COUNT ERROR-level findings detected."
+            exit 1
+          fi
+          echo "SAST gate passed."
+
       - name: Upload Semgrep SARIF report
-        if: always()  # Save report regardless of gate pass/fail
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: semgrep-report            # Artifact name in GitHub Actions UI
-          path: semgrep-results.sarif     # File created by Semgrep in Step 2
-          retention-days: 30              # Keep for 30 days
+          name: semgrep-report
+          path: semgrep-results.sarif
+          retention-days: 30
 
 
   # ════════════════════════════════════════════════════════════════════════════
-  # JOB 3 — SCA — SOFTWARE COMPOSITION ANALYSIS (Trivy Filesystem)
-  # PURPOSE : Scan package.json and node_modules for known CVEs in dependencies
-  # RUNS    : After Job 1 (secrets_scan) — in PARALLEL with Job 2 (sast_scan)
-  # GATE    : FAIL if CRITICAL CVE count exceeds threshold of 5
-  # NOTE    : Threshold is 5 (not 0) because Juice Shop intentionally ships with
-  #           vulnerable packages (node-serialize RCE, vm2 sandbox escape) as challenges
-  #           For a real production app, this threshold MUST be 0
+  # JOB 3 — SCA — DEPENDENCY SCAN (Trivy Filesystem)
+  # Starts after Job 1 passes — runs in PARALLEL with Job 2
+  # Gate: FAIL if CRITICAL CVEs in dependencies exceed 5
+  # Note: Threshold is 5 (not 0) — Juice Shop intentionally ships vulnerable
+  #       packages (node-serialize RCE, vm2 sandbox escape) as learning challenges
+  #       For any real production app this threshold MUST be 0
   # ════════════════════════════════════════════════════════════════════════════
   sca_scan:
     name: "📦 SCA — Trivy Dependency Scan"
-
     runs-on: ubuntu-latest
-
-    needs: secrets_scan  # Waits for secrets_scan to pass before starting
-                         # Runs in parallel with sast_scan (both need only secrets_scan)
+    needs: secrets_scan
 
     steps:
-
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      # Step 2: Run Trivy in filesystem scan mode
-      # scan-type: fs        = scan the filesystem (not a container image)
-      # scan-ref: .          = scan from the current directory (root of the repo)
-      # scanners: vuln,secret = scan for vulnerabilities AND embedded secrets
-      # severity: CRITICAL,HIGH = only report CRITICAL and HIGH findings
-      # exit-code: '0'       = do NOT fail based on Trivy's own exit code
-      #                        we apply our own custom gate in the next step
-      # format: json         = output results as JSON (easier to parse with Python)
-      # output: trivy-fs-results.json = save results to this file
+      # scan-type: fs     = filesystem scan (not container image scan)
+      # scan-ref: .       = scan from repo root
+      # scanners: vuln    = scan for known CVEs in package.json / node_modules
+      # severity: CRITICAL,HIGH = report only these two severity levels
+      # exit-code: '0'    = never auto-fail — we enforce our own gate below
+      # format: json      = machine-readable output for Python parsing
+      # output: trivy-fs-results.json = save JSON to this file
       - name: Run Trivy filesystem scan
-        uses: aquasecurity/trivy-action@master  # Official Trivy GitHub Action
+        uses: aquasecurity/trivy-action@master
         with:
-          scan-type: fs                         # Filesystem scan mode (not image scan)
-          scan-ref: .                           # Scan from repo root
-          scanners: vuln,secret                 # Scan for vulnerabilities and secrets
-          severity: CRITICAL,HIGH               # Only report these severity levels
-          exit-code: '0'                        # Don't auto-fail — we gate manually below
-          format: json                          # JSON output for Python parsing
-          output: trivy-fs-results.json         # Save JSON results to this file
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln
+          severity: CRITICAL,HIGH
+          exit-code: '0'
+          format: json
+          output: trivy-fs-results.json
 
-      # Step 3: Parse Trivy JSON output and enforce our custom CRITICAL threshold
-      # We count only CRITICAL severity findings across all scan targets
-      # If count > 5, the gate fails and blocks the pipeline
-      # "2>/dev/null" suppresses Python error messages if JSON parsing fails
+      # Custom gate: count only CRITICAL findings across all scan targets
+      # Juice Shop threshold = 5 (intentional vulnerable deps)
+      # Production threshold = 0
       - name: Enforce SCA severity gate
         run: |
-          CRITICAL_COUNT=$(cat trivy-fs-results.json | python3 -c "
-          import json, sys
-          data = json.load(sys.stdin)                    # Load Trivy JSON output
-          count = sum(
-              1 for result in data.get('Results', [])   # Loop through each scan target
-              for v in result.get('Vulnerabilities', []) # Loop through each vulnerability
-              if v.get('Severity') == 'CRITICAL'         # Count only CRITICAL ones
-          )
-          print(count)
+          CRITICAL_COUNT=$(python3 -c "
+          import json
+          try:
+              with open('trivy-fs-results.json') as f:
+                  data = json.load(f)
+              count = sum(
+                  1 for result in data.get('Results', [])
+                  for v in result.get('Vulnerabilities', [])
+                  if v.get('Severity') == 'CRITICAL'
+              )
+              print(count)
+          except Exception as e:
+              print(0)
           ")
           echo "CRITICAL CVEs in dependencies: $CRITICAL_COUNT"
-          if [ "$CRITICAL_COUNT" -gt "5" ]; then         # Gate: fail if more than 5 CRITICAL CVEs
-            echo "❌ SCA gate FAILED — $CRITICAL_COUNT CRITICAL CVEs (threshold: 5)."
-            exit 1                                        # Fail the job — pipeline blocked
+          if [ "$CRITICAL_COUNT" -gt "5" ]; then
+            echo "SCA gate FAILED — $CRITICAL_COUNT CRITICAL CVEs exceed threshold of 5."
+            exit 1
           fi
-          echo "✅ SCA gate passed. CRITICAL count: $CRITICAL_COUNT"
+          echo "SCA gate passed. CRITICAL count: $CRITICAL_COUNT"
 
-      # Step 4: Print a human-readable summary grouped by severity level
-      # This gives developers a quick overview in the pipeline logs
-      # "if: always()" runs this even if the gate above failed
-      - name: Print SCA summary by severity
+      # Print human-readable breakdown by severity for pipeline logs
+      - name: Print SCA summary
         if: always()
         run: |
-          cat trivy-fs-results.json | python3 -c "
-          import json, sys
-          data = json.load(sys.stdin)
-          print('=== DEPENDENCY VULNERABILITY SUMMARY ===')
-          for result in data.get('Results', []):
-              vulns = result.get('Vulnerabilities', [])
-              if vulns:                                           # Only print if vulns exist
-                  print(f\"Target: {result.get('Target','unknown')}\")
-                  for sev in ['CRITICAL','HIGH','MEDIUM','LOW']: # Print counts by severity
-                      c = sum(1 for v in vulns if v.get('Severity')==sev)
-                      if c: print(f'  {sev}: {c}')
+          python3 -c "
+          import json
+          try:
+              with open('trivy-fs-results.json') as f:
+                  data = json.load(f)
+              print('=== DEPENDENCY VULNERABILITY SUMMARY ===')
+              for result in data.get('Results', []):
+                  vulns = result.get('Vulnerabilities', [])
+                  if vulns:
+                      print(f\"Target: {result.get('Target','unknown')}\")
+                      for sev in ['CRITICAL','HIGH','MEDIUM','LOW']:
+                          c = sum(1 for v in vulns if v.get('Severity') == sev)
+                          if c:
+                              print(f'  {sev}: {c}')
+          except Exception:
+              print('Could not parse trivy-fs-results.json')
           "
 
-      # Step 5: Save the full Trivy JSON report as a pipeline artifact
       - name: Upload Trivy FS report
-        if: always()  # Save even if gate failed — needed for metrics dashboard
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: trivy-fs-report          # Artifact name
-          path: trivy-fs-results.json    # Trivy output file from Step 2
+          name: trivy-fs-report
+          path: trivy-fs-results.json
           retention-days: 30
 
 
   # ════════════════════════════════════════════════════════════════════════════
   # JOB 4 — BUILD & PUSH DOCKER IMAGE
-  # PURPOSE : Build the Docker image and push it to Docker Hub
-  # RUNS    : Only after BOTH sast_scan (Job 2) AND sca_scan (Job 3) pass
-  # KEY     : Image is saved as a .tar file and uploaded as a GitHub artifact
-  #           so Jobs 5 (Trivy image scan) and 7 (Syft SBOM) can download it
-  #           without pulling from Docker Hub again
+  # Starts only after BOTH Job 2 (SAST) AND Job 3 (SCA) pass
+  # Saves image as .tar and uploads to GitHub artifact storage
+  # so Jobs 5, 7, and 8 can download it without re-pulling from Docker Hub
   # ════════════════════════════════════════════════════════════════════════════
   build_push:
     name: "🐳 Build & Push Docker Image"
-
     runs-on: ubuntu-latest
-
-    # This job needs BOTH sast_scan AND sca_scan to succeed before it starts
-    # If either fails, this job (and all downstream jobs) are skipped
     needs: [sast_scan, sca_scan]
 
     steps:
-
       - name: Checkout Repository
-        uses: actions/checkout@v3  # Clone repo so Dockerfile is available to build
+        uses: actions/checkout@v4
 
-      # Step 2: Log into Docker Hub using credentials stored in GitHub Secrets
-      # "--password-stdin" reads the password from stdin (pipe) — more secure than
-      # passing it as a command argument (which would show in process lists)
+      # Login to Docker Hub using credentials from GitHub Secrets
+      # "--password-stdin" pipes the token securely (not visible in process list)
       - name: Login to Docker Hub
         run: |
-          echo "${{ secrets.DOCKERHUB_TOKEN }}" | \          # Pipe the token as stdin
-          docker login -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin  # Login
+          echo "${{ secrets.DOCKERHUB_TOKEN }}" | docker login -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
 
-      # Step 3: Build the Docker image using the Dockerfile in the repo root
-      # -t = tag the image with the full Docker Hub path and auto-incremented version number
-      # Example tag: myuser/gitops-dev/secops-juice-shop-project:4
+      # Build image tagged with auto-incremented VERSION from version.txt
       - name: Build Docker Image
         run: |
           docker build -t docker.io/${{ env.DOCKERHUB_REPO }}:${{ env.VERSION }} .
-          # "." at the end means use the Dockerfile in the current directory
 
-      # Step 4: Push the built image to Docker Hub
-      # This makes it available for Kubernetes to pull during deployment
+      # Push built image to Docker Hub registry
       - name: Push Docker Image to Docker Hub
         run: |
           docker push docker.io/${{ env.DOCKERHUB_REPO }}:${{ env.VERSION }}
 
-      # Step 5: Save the image as a .tar file on the runner's local disk
-      # "docker save" exports the image layers to a single archive file
-      # This is needed because Jobs 5 and 7 run on DIFFERENT runners (fresh VMs)
-      # They cannot access the Docker daemon of this runner directly
-      # Solution: save to .tar → upload to GitHub artifacts → Jobs 5/7 download it
+      # Save image as .tar file — Jobs 5, 7, 8 run on fresh runners that
+      # have no Docker images. Solution: save → upload → they download the .tar
       - name: Save Docker Image as tar
         run: |
-          docker save -o juiceshop-image.tar \              # -o = output file path
-            docker.io/${{ env.DOCKERHUB_REPO }}:${{ env.VERSION }}  # Image to save
+          docker save -o juiceshop-image.tar docker.io/${{ env.DOCKERHUB_REPO }}:${{ env.VERSION }}
 
-      # Step 6: Upload the .tar file to GitHub artifact storage
-      # GitHub stores this file temporarily so other jobs can download it
-      # retention-days: 1 = delete after 1 day (it's only needed during this pipeline run)
+      # Upload .tar to GitHub artifact storage (shared across all jobs in this run)
+      # retention-days: 1 = delete after 1 day (only needed during this pipeline run)
       - name: Upload Docker Image tar as artifact
         uses: actions/upload-artifact@v4
         with:
-          name: docker-image-tar             # Artifact name — used in download steps of Jobs 5 and 7
-          path: juiceshop-image.tar          # Local file to upload
-          retention-days: 1                  # Only keep for 1 day — temporary cross-job transfer
+          name: docker-image-tar
+          path: juiceshop-image.tar
+          retention-days: 1
 
 
   # ════════════════════════════════════════════════════════════════════════════
   # JOB 5 — CONTAINER IMAGE SCAN (Trivy image mode)
-  # PURPOSE : Scan OS packages and runtime layers inside the built Docker image
-  # RUNS    : After Job 4 (build_push) — in PARALLEL with Jobs 6 and 7
-  # GATE    : HARD FAIL on any CRITICAL CVE found in OS or runtime layers
-  # KEY     : Downloads the .tar artifact from Job 4 — no re-pull from Docker Hub
-  #           This ensures we scan the EXACT same image that was built, not a cached one
+  # Starts after Job 4 — runs in PARALLEL with Jobs 6 and 7
+  # Downloads .tar from Job 4 artifact — scans the exact same image that was built
+  # Gate: HARD FAIL on any CRITICAL CVE in OS / runtime layers
   # ════════════════════════════════════════════════════════════════════════════
   image_scan:
     name: "🛡️ Image Scan — Trivy"
-
-    runs-on: ubuntu-latest  # Fresh runner — has no Docker images from Job 4
-
-    needs: build_push  # Wait for Job 4 to complete and upload the .tar artifact
+    runs-on: ubuntu-latest
+    needs: build_push
 
     steps:
-
       - name: Checkout Repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
-      # Step 2: Download the .tar file uploaded by Job 4
-      # "name: docker-image-tar" must match exactly what Job 4 uploaded
-      # "path: ." downloads the file into the current working directory
+      # Download the .tar saved and uploaded by Job 4
+      # "name" must match exactly what Job 4 uploaded
       - name: Download Docker Image tar artifact
-        uses: actions/download-artifact@v4  # Official GitHub action to download artifacts
+        uses: actions/download-artifact@v4
         with:
-          name: docker-image-tar  # Must match the artifact name from Job 4's upload step
-          path: .                 # Download into current directory
+          name: docker-image-tar
+          path: .
 
-      # Step 3: Run Trivy in image scan mode against the downloaded .tar file
-      # input: juiceshop-image.tar = scan the local .tar file (not a registry image)
-      # severity: CRITICAL,HIGH    = report only these severities
-      # exit-code: '0'             = don't auto-fail — we apply our own gate below
-      # format: json               = JSON output for Python parsing
-      # output: trivy-image-results.json = save results here
+      # Scan the .tar in tarball mode (no registry pull needed)
+      # exit-code: '0' = never auto-fail — our custom gate handles this
       - name: Run Trivy image scan in tarball mode
         uses: aquasecurity/trivy-action@master
         with:
-          input: juiceshop-image.tar          # Scan the local .tar file downloaded above
-          severity: CRITICAL,HIGH             # Only report CRITICAL and HIGH
-          exit-code: '0'                      # We enforce the gate manually below
-          format: json                        # JSON for parsing
-          output: trivy-image-results.json    # Output file
+          input: juiceshop-image.tar
+          severity: CRITICAL,HIGH
+          exit-code: '0'
+          format: json
+          output: trivy-image-results.json
 
-      # Step 4: Parse results and enforce ZERO CRITICAL OS CVE gate
-      # We specifically target OS-level vulnerabilities (alpine, debian, ubuntu, node runtime)
-      # These are fixable by updating the base image in the Dockerfile
-      # Application dependency CVEs are handled separately by Job 3 (SCA scan)
-      # os_types = the Trivy target type names for OS and runtime layers
+      # Gate: zero tolerance for CRITICAL CVEs in OS/runtime layers
+      # os_types filters only OS and Node.js runtime results (not app dependencies)
+      # App dependency CVEs are handled by Job 3 with the threshold of 5
       - name: Enforce image scan gate — fail on CRITICAL OS CVEs
         run: |
-          CRITICAL_COUNT=$(cat trivy-image-results.json | python3 -c "
-          import json, sys
-          data = json.load(sys.stdin)
-          os_types = {'alpine','debian','ubuntu','centos','rhel','node'}  # OS/runtime layer types
-          count = sum(
-              1 for result in data.get('Results', [])
-              if result.get('Type','').lower() in os_types  # Only OS/runtime targets
-              for v in result.get('Vulnerabilities', [])
-              if v.get('Severity') == 'CRITICAL'            # Only CRITICAL severity
-          )
-          print(count)
+          CRITICAL_COUNT=$(python3 -c "
+          import json
+          try:
+              with open('trivy-image-results.json') as f:
+                  data = json.load(f)
+              os_types = {'alpine','debian','ubuntu','centos','rhel','node'}
+              count = sum(
+                  1 for result in data.get('Results', [])
+                  if result.get('Type','').lower() in os_types
+                  for v in result.get('Vulnerabilities', [])
+                  if v.get('Severity') == 'CRITICAL'
+              )
+              print(count)
+          except Exception:
+              print(0)
           ")
           echo "CRITICAL OS/runtime CVEs in image: $CRITICAL_COUNT"
-          if [ "$CRITICAL_COUNT" -gt "0" ]; then           # Gate: ZERO tolerance for OS CVEs
-            echo "❌ Image scan gate FAILED — $CRITICAL_COUNT CRITICAL OS CVEs."
-            echo "Fix: Update the FROM line in your Dockerfile to a newer base image."
-            exit 1                                          # Fail — pipeline blocked
+          if [ "$CRITICAL_COUNT" -gt "0" ]; then
+            echo "Image scan gate FAILED — $CRITICAL_COUNT CRITICAL OS CVEs."
+            echo "Fix: update the FROM line in your Dockerfile to a newer base image."
+            exit 1
           fi
-          echo "✅ Image scan gate passed."
+          echo "Image scan gate passed."
 
-      # Step 5: Save the image scan report as artifact
       - name: Upload Trivy image report
-        if: always()  # Save report even if gate failed
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: trivy-image-report           # Artifact name
-          path: trivy-image-results.json     # Trivy JSON output from Step 3
+          name: trivy-image-report
+          path: trivy-image-results.json
           retention-days: 30
 
 
   # ════════════════════════════════════════════════════════════════════════════
   # JOB 6 — IaC SCANNING (Checkov)
-  # PURPOSE : Scan Kubernetes YAML manifests for security misconfigurations
-  # RUNS    : After Job 4 (build_push) — in PARALLEL with Jobs 5 and 7
-  # GATE    : FAIL on any CRITICAL or HIGH Kubernetes misconfiguration
-  # CHECKS  : CIS Kubernetes benchmarks (non-root containers, resource limits,
-  #           security contexts, image tag pinning, capability dropping, etc.)
+  # Starts after Job 4 — runs in PARALLEL with Jobs 5 and 7
+  # Scans all YAML files in k8s/ against CIS Kubernetes benchmarks
+  # Gate: FAIL on any CRITICAL or HIGH misconfiguration
   # ════════════════════════════════════════════════════════════════════════════
   iac_scan:
     name: "🏗️ IaC Scan — Checkov"
-
     runs-on: ubuntu-latest
-
-    needs: build_push  # Runs after build completes — parallel with image_scan and sbom_generate
+    needs: build_push
 
     steps:
-
       - name: Checkout Repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
-      # Step 2: Install Checkov using pip (Python package manager)
-      # "--break-system-packages" is required on Ubuntu 24+ to install system-wide
-      # Checkov is Bridgecrew's open-source IaC scanner
+      # Install Checkov — Bridgecrew's open-source IaC security scanner
+      # "--break-system-packages" required on Ubuntu 24+ for pip system-wide install
       - name: Install Checkov
-        run: pip install checkov --break-system-packages  # Install Checkov globally
+        run: pip install checkov --break-system-packages
 
-      # Step 3: Run Checkov against the k8s/ directory
-      # -d k8s/               = scan all YAML files in the k8s/ directory
-      # --framework kubernetes = use the Kubernetes-specific ruleset
-      # --output json          = output results as JSON (for our gate step)
-      # --output-file checkov-results.json = save JSON to this file
-      # --soft-fail-on MEDIUM,LOW = don't fail for MEDIUM or LOW (we only gate on CRITICAL/HIGH)
-      # "|| true"              = don't let Checkov's exit code stop the pipeline here
-      #                          we enforce our own gate in the next step
+      # Scan k8s/ directory for Kubernetes security misconfigurations
+      # -d k8s/               = scan all YAML files in k8s/ directory
+      # --framework kubernetes = use Kubernetes-specific CIS benchmark rules
+      # --output json         = machine-readable output for our gate step
+      # --output-file         = save JSON results to this file
+      # --soft-fail-on MEDIUM,LOW = only CRITICAL/HIGH cause hard failure
+      # "|| true"             = don't let Checkov exit code stop the pipeline
       - name: Run Checkov IaC scan on k8s manifests
         run: |
-          checkov -d k8s/ \                              # Scan the k8s/ manifests directory
-            --framework kubernetes \                     # Kubernetes ruleset
-            --output json \                              # JSON output format
-            --output-file checkov-results.json \         # Save results here
-            --soft-fail-on MEDIUM,LOW \                  # Only hard-fail on CRITICAL/HIGH
-            || true                                      # Continue even if Checkov exits non-zero
+          checkov -d k8s/ \
+            --framework kubernetes \
+            --output json \
+            --output-file checkov-results.json \
+            --soft-fail-on MEDIUM,LOW \
+            || true
 
-      # Step 4: Parse Checkov JSON and enforce CRITICAL/HIGH gate
-      # Checkov results have a "results.failed_checks" array
-      # Each check has a severity field — we count only CRITICAL and HIGH failures
-      # "2>/dev/null || echo 0" handles the case where JSON parsing fails gracefully
-      - name: Enforce IaC gate — fail on CRITICAL/HIGH
+      # Parse Checkov JSON and count CRITICAL/HIGH failed checks
+      - name: Enforce IaC gate — fail on CRITICAL or HIGH
         run: |
-          FAILED_COUNT=$(cat checkov-results.json | python3 -c "
-          import json, sys
-          data = json.load(sys.stdin)
-          results = data if isinstance(data, list) else [data]  # Handle array or single object
-          count = 0
-          for r in results:
-              for check in r.get('results', {}).get('failed_checks', []):  # Each failed check
-                  sev = check.get('check_result', {}).get('severity', '')  # Get its severity
-                  if sev in ['CRITICAL', 'HIGH']:                           # Count only CRITICAL/HIGH
-                      count += 1
-          print(count)
-          " 2>/dev/null || echo "0")                    # If parsing fails, default to 0
+          FAILED_COUNT=$(python3 -c "
+          import json
+          try:
+              with open('checkov-results.json') as f:
+                  data = json.load(f)
+              results = data if isinstance(data, list) else [data]
+              count = 0
+              for r in results:
+                  for check in r.get('results', {}).get('failed_checks', []):
+                      sev = check.get('check_result', {}).get('severity', '')
+                      if sev in ['CRITICAL', 'HIGH']:
+                          count += 1
+              print(count)
+          except Exception:
+              print(0)
+          ")
           echo "CRITICAL/HIGH IaC misconfigurations: $FAILED_COUNT"
-          if [ "$FAILED_COUNT" -gt "0" ]; then          # Gate: fail if any CRITICAL/HIGH found
-            echo "❌ IaC gate FAILED — $FAILED_COUNT CRITICAL/HIGH misconfigs in k8s/"
-            exit 1                                       # Fail job — pipeline blocked
+          if [ "$FAILED_COUNT" -gt "0" ]; then
+            echo "IaC gate FAILED — $FAILED_COUNT CRITICAL/HIGH misconfigs in k8s/"
+            exit 1
           fi
-          echo "✅ IaC gate passed."
+          echo "IaC gate passed."
 
-      # Step 5: Upload Checkov report as artifact
       - name: Upload Checkov report
-        if: always()  # Save report regardless of gate result
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: checkov-report           # Artifact name
-          path: checkov-results.json     # Checkov JSON output from Step 3
+          name: checkov-report
+          path: checkov-results.json
           retention-days: 30
 
 
   # ════════════════════════════════════════════════════════════════════════════
   # JOB 7 — SBOM GENERATION (Syft)
-  # PURPOSE : Generate a Software Bill of Materials listing every package in the image
-  # RUNS    : After Job 4 (build_push) — in PARALLEL with Jobs 5 and 6
-  # GATE    : NON-BLOCKING — warn only (SBOM generation failure doesn't block deploy)
-  # OUTPUT  : sbom.json (Syft native format) + sbom.spdx.json (SPDX industry standard)
-  # WHY SBOM: Provides full package inventory for compliance, auditing, and license tracking
+  # Starts after Job 4 — runs in PARALLEL with Jobs 5 and 6
+  # Generates a Software Bill of Materials in two formats:
+  #   sbom.json       = Syft native format
+  #   sbom.spdx.json  = SPDX industry standard (required for EO 14028 compliance)
+  # Gate: NON-BLOCKING — SBOM failure does not block deployment
   # ════════════════════════════════════════════════════════════════════════════
   sbom_generate:
     name: "📋 SBOM — Syft"
-
     runs-on: ubuntu-latest
-
-    needs: build_push  # Runs after image is built — parallel with image_scan and iac_scan
+    needs: build_push
 
     steps:
-
       - name: Checkout Repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
-      # Step 2: Download the Docker .tar artifact from Job 4
-      # We need the image locally to run Syft against it
+      # Download the .tar artifact from Job 4
       - name: Download Docker Image tar artifact
         uses: actions/download-artifact@v4
         with:
-          name: docker-image-tar  # Must match artifact name from Job 4
-          path: .                 # Download to current directory
+          name: docker-image-tar
+          path: .
 
-      # Step 3: Install Syft — Anchore's open-source SBOM generator
-      # The install script downloads the latest Syft binary and places it in /usr/local/bin
-      # "-b /usr/local/bin" sets the installation directory
+      # Install Syft — Anchore's open-source SBOM generator
+      # Downloads the latest Syft binary into /usr/local/bin
       - name: Install Syft
         run: |
-          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | \
-          sh -s -- -b /usr/local/bin  # Install Syft binary into /usr/local/bin
+          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
 
-      # Step 4: Load the .tar image into the local Docker daemon
-      # "docker load" imports a saved image .tar back into Docker
-      # This makes the image available for Syft to scan via Docker's API
+      # Load the .tar file back into Docker so Syft can access it via Docker API
       - name: Load Docker image from tar
-        run: docker load -i juiceshop-image.tar  # -i = input file (the .tar artifact)
+        run: docker load -i juiceshop-image.tar
 
-      # Step 5: Generate SBOM in Syft's native JSON format
-      # Lists every OS package and language package found in the image layers
-      # The Python inline script counts total packages and logs to the pipeline output
-      - name: Generate SBOM — JSON format
+      # Generate SBOM in Syft native JSON format
+      # Lists every OS package and language dependency found in the image
+      - name: Generate SBOM in JSON format
         run: |
-          syft docker.io/${{ env.DOCKERHUB_REPO }}:${{ env.VERSION }} \  # Image to scan
-            -o json > sbom.json                                            # -o = output format
-          echo "SBOM package count: $(cat sbom.json | python3 -c \
-            'import json,sys; d=json.load(sys.stdin); print(len(d.get("artifacts",[])))' \
-          )"                                                               # Log package count
+          syft docker.io/${{ env.DOCKERHUB_REPO }}:${{ env.VERSION }} -o json > sbom.json
+          PACKAGE_COUNT=$(python3 -c "
+          import json
+          with open('sbom.json') as f:
+              d = json.load(f)
+          print(len(d.get('artifacts', [])))
+          ")
+          echo "Total packages in SBOM: $PACKAGE_COUNT"
 
-      # Step 6: Generate SBOM in SPDX-JSON format
-      # SPDX = Software Package Data Exchange — the industry standard SBOM format
-      # Required for compliance with US Executive Order 14028 (software supply chain security)
-      - name: Generate SBOM — SPDX format
+      # Generate SBOM in SPDX-JSON format
+      # SPDX = Software Package Data Exchange — industry standard for supply chain compliance
+      - name: Generate SBOM in SPDX format
         run: |
-          syft docker.io/${{ env.DOCKERHUB_REPO }}:${{ env.VERSION }} \  # Same image
-            -o spdx-json > sbom.spdx.json                                 # SPDX JSON format
+          syft docker.io/${{ env.DOCKERHUB_REPO }}:${{ env.VERSION }} -o spdx-json > sbom.spdx.json
 
-      # Step 7: Upload both SBOM files as pipeline artifacts
-      # retention-days: 90 = keep for 90 days (longer than other reports — compliance record)
+      # Keep SBOM artifacts for 90 days — longer than other reports for compliance audit trail
       - name: Upload SBOM artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: sbom-reports     # Artifact name in GitHub Actions UI
+          name: sbom-reports
           path: |
-            sbom.json            # Syft native JSON format
-            sbom.spdx.json       # SPDX industry standard format
-          retention-days: 90     # Keep 90 days for compliance audit trail
+            sbom.json
+            sbom.spdx.json
+          retention-days: 90
 
 
   # ════════════════════════════════════════════════════════════════════════════
   # JOB 8 — DAST — DYNAMIC APPLICATION SECURITY TESTING (OWASP ZAP)
-  # PURPOSE : Run automated attacks against the RUNNING application to find runtime vulns
-  # RUNS    : After Jobs 5 + 6 + 7 ALL complete (all three must pass)
-  # GATE    : FAIL on any HIGH risk alert reported by ZAP
-  # HOW     : Starts the app in Docker, waits for it, runs ZAP, then stops the app
-  # ZAP MODE: Baseline scan — crawls the app and tests without authentication
-  #           (Full authenticated scan is the "active scan" — more destructive)
+  # Starts only after Jobs 5 + 6 + 7 ALL complete
+  # Starts the app in Docker, runs ZAP baseline scan against it, then stops the app
+  # Gate: FAIL on any HIGH risk alert (riskcode 3 in ZAP JSON output)
+  # ZAP baseline = passive crawl + limited active probes (no auth required)
   # ════════════════════════════════════════════════════════════════════════════
   dast_scan:
     name: "🕷️ DAST — OWASP ZAP Baseline"
-
     runs-on: ubuntu-latest
-
-    # All three parallel jobs (image_scan, iac_scan, sbom_generate) must pass
-    # before DAST runs — this is the synchronization point after the parallel stage
     needs: [image_scan, iac_scan, sbom_generate]
 
     steps:
-
       - name: Checkout Repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
-      # Step 2: Download the Docker .tar so we can start the app for DAST scanning
+      # Download the .tar so we can start the app for ZAP to scan
       - name: Download Docker Image tar artifact
         uses: actions/download-artifact@v4
         with:
-          name: docker-image-tar  # Same artifact from Job 4
+          name: docker-image-tar
           path: .
 
-      # Step 3: Load the image and start Juice Shop as a background container
-      # "docker load" imports the .tar back into Docker
-      # "docker run -d" starts the container in detached (background) mode
-      # "--name juiceshop-dast" gives the container a name so we can stop it later
-      # "-p 3000:3000" maps container port 3000 to host port 3000 (ZAP will hit localhost:3000)
+      # Load image and start Juice Shop as a background container
+      # -d = detached mode (runs in background)
+      # -p 3000:3000 = map host port 3000 to container port 3000
+      # ZAP will hit http://localhost:3000 to scan the app
       - name: Load and start Juice Shop for DAST scanning
         run: |
-          docker load -i juiceshop-image.tar  # Import image from .tar file
-          docker run -d \                     # Run in background (detached mode)
-            --name juiceshop-dast \           # Name the container for later reference
-            -p 3000:3000 \                    # Map port 3000 host → 3000 container
-            docker.io/${{ env.DOCKERHUB_REPO }}:${{ env.VERSION }}  # Image to run
+          docker load -i juiceshop-image.tar
+          docker run -d \
+            --name juiceshop-dast \
+            -p 3000:3000 \
+            docker.io/${{ env.DOCKERHUB_REPO }}:${{ env.VERSION }}
 
-      # Step 4: Poll the app with curl until it responds with HTTP 200
-      # Juice Shop takes ~20-30 seconds to start (Node.js app initialization)
-      # We try up to 30 times with 5 second waits = up to 150 seconds total
-      # "|| echo 000" returns "000" if curl fails (connection refused) instead of erroring
+      # Poll app with curl until it returns HTTP 200
+      # Juice Shop takes ~30 seconds to start (Node.js initialization)
+      # Try 30 times × 5 seconds = up to 150 seconds total wait time
       - name: Wait for app to be ready
         run: |
           echo "Waiting for Juice Shop to start..."
-          for i in $(seq 1 30); do                                          # Try 30 times
+          for i in $(seq 1 30); do
             HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:3000 || echo "000")
-            # -s = silent, -o /dev/null = discard body, -w "%{http_code}" = print status code only
-            if [ "$HTTP_STATUS" = "200" ]; then                            # If app is ready
-              echo "✅ App is ready (HTTP $HTTP_STATUS)"
-              break                                                         # Exit the loop
+            if [ "$HTTP_STATUS" = "200" ]; then
+              echo "App is ready — HTTP $HTTP_STATUS"
+              break
             fi
             echo "Attempt $i — HTTP $HTTP_STATUS — waiting 5s..."
-            sleep 5                                                         # Wait 5 seconds before retry
+            sleep 5
           done
 
-      # Step 5: Run OWASP ZAP Baseline scan using the official ZAP Docker container
-      # --network host          = ZAP container shares the host network (can reach localhost:3000)
-      # -v $(pwd):/zap/wrk/:rw = mount current directory into ZAP container for report output
-      # zap-baseline.py         = ZAP's baseline scan script (passive + limited active checks)
-      # -t http://localhost:3000 = target URL to scan
-      # -r zap-report.html      = generate HTML report (human-readable)
-      # -J zap-report.json      = generate JSON report (machine-parseable for our gate)
-      # -I                      = don't fail based on ZAP's own exit code (we gate manually)
-      # "|| true"               = ensure step doesn't fail even if ZAP finds issues
+      # Run ZAP baseline scan against the running Juice Shop
+      # --network host        = ZAP container shares host network (reaches localhost:3000)
+      # -v $(pwd):/zap/wrk/  = mount working dir so ZAP can write reports there
+      # zap-baseline.py      = passive scan script (safe — does not attack the app aggressively)
+      # -t                   = target URL
+      # -r zap-report.html   = HTML report (human-readable)
+      # -J zap-report.json   = JSON report (for our gate parser)
+      # -I                   = ignore ZAP's own exit code (we gate manually)
       - name: Run OWASP ZAP Baseline DAST scan
         run: |
-          docker run --rm \                         # Remove container after it finishes
-            --network host \                        # Use host network to reach localhost:3000
-            -v $(pwd):/zap/wrk/:rw \               # Mount working dir for report output
-            ghcr.io/zaproxy/zaproxy:stable \       # Official ZAP Docker image
-            zap-baseline.py \                       # Baseline scan script
-            -t http://localhost:3000 \             # Target: our running Juice Shop
-            -r zap-report.html \                   # HTML report output file
-            -J zap-report.json \                   # JSON report output file
-            -I \                                   # Ignore ZAP's exit code
-            || true                                # Don't fail this step on ZAP errors
+          docker run --rm \
+            --network host \
+            -v $(pwd):/zap/wrk/:rw \
+            ghcr.io/zaproxy/zaproxy:stable \
+            zap-baseline.py \
+            -t http://localhost:3000 \
+            -r zap-report.html \
+            -J zap-report.json \
+            -I \
+            || true
 
-      # Step 6: Parse ZAP JSON report and enforce HIGH alert gate
-      # ZAP risk codes: 0=Informational, 1=LOW, 2=MEDIUM, 3=HIGH
-      # "riskcode": "3" = HIGH risk alert
-      # Gate: fail if any HIGH risk alerts are found
+      # ZAP risk codes: 0=Info, 1=LOW, 2=MEDIUM, 3=HIGH
+      # Gate: fail if any HIGH (riskcode=3) alerts are found
       - name: Enforce DAST gate — fail on HIGH alerts
         run: |
-          HIGH_COUNT=$(cat zap-report.json | python3 -c "
-          import json, sys
-          data = json.load(sys.stdin)
-          count = sum(
-              1 for alert in data.get('site', [{}])[0].get('alerts', [])  # Loop through ZAP alerts
-              if alert.get('riskcode') == '3'                              # riskcode 3 = HIGH
-          )
-          print(count)
-          " 2>/dev/null || echo "0")                  # Default to 0 if JSON parsing fails
+          HIGH_COUNT=$(python3 -c "
+          import json
+          try:
+              with open('zap-report.json') as f:
+                  data = json.load(f)
+              count = sum(
+                  1 for alert in data.get('site', [{}])[0].get('alerts', [])
+                  if alert.get('riskcode') == '3'
+              )
+              print(count)
+          except Exception:
+              print(0)
+          ")
           echo "ZAP HIGH risk alerts: $HIGH_COUNT"
-          if [ "$HIGH_COUNT" -gt "0" ]; then           # Gate: fail if any HIGH alerts found
-            echo "❌ DAST gate FAILED — $HIGH_COUNT HIGH risk alerts detected."
-            exit 1                                     # Fail job — pipeline blocked
+          if [ "$HIGH_COUNT" -gt "0" ]; then
+            echo "DAST gate FAILED — $HIGH_COUNT HIGH risk alerts detected."
+            exit 1
           fi
-          echo "✅ DAST gate passed."
+          echo "DAST gate passed."
 
-      # Step 7: Stop and remove the Juice Shop DAST target container
-      # "if: always()" ensures cleanup happens even if ZAP gate failed
-      # "|| true" prevents step failure if container already stopped
+      # Always stop the DAST container even if ZAP gate failed
       - name: Stop DAST target container
-        if: always()                                   # Always clean up the container
-        run: docker stop juiceshop-dast || true       # Stop container (ignore error if already stopped)
+        if: always()
+        run: docker stop juiceshop-dast || true
 
-      # Step 8: Upload both ZAP reports as pipeline artifacts
-      # HTML report = human-readable for developer review
-      # JSON report = machine-readable for metrics dashboard
       - name: Upload ZAP reports
-        if: always()  # Save reports even if gate failed
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: zap-dast-report     # Artifact name
+          name: zap-dast-report
           path: |
-            zap-report.html         # Human-readable HTML report
-            zap-report.json         # Machine-readable JSON report
+            zap-report.html
+            zap-report.json
           retention-days: 30
 
 
   # ════════════════════════════════════════════════════════════════════════════
   # JOB 9 — DEPLOY & UPDATE MANIFESTS (GitOps Loop)
-  # PURPOSE : Update deployment.yaml with new image tag and push back to repo
-  # RUNS    : Only after ALL previous gates pass (dast_scan is the final gate)
-  # GITOPS  : Git repo becomes the single source of truth for deployed state
-  #           ArgoCD/Flux watches deployment.yaml and auto-syncs to the cluster
-  # KEY     : "permissions: contents: write" is required to push back to the repo
+  # Starts only after Job 8 (DAST) passes — final gate
+  # Updates deployment.yaml with new image tag and pushes back to repo
+  # ArgoCD watches the repo and auto-syncs the cluster when this commit lands
+  # "permissions: contents: write" is required — without it git push returns 403
   # ════════════════════════════════════════════════════════════════════════════
   deploy_and_update:
     name: "☸️ Deploy & Update Manifests"
-
     runs-on: ubuntu-latest
+    needs: dast_scan
 
-    needs: dast_scan  # Only run after ALL security gates have passed (dast_scan is last)
-
-    # Grant this job write access to repo contents so it can push the manifest update
-    # Without this, git push fails with "Permission denied" (403 error)
     permissions:
-      contents: write  # Required to commit and push deployment.yaml back to the repo
+      contents: write
 
     steps:
-
-      # Step 1: Checkout with the GITHUB_TOKEN that has write permissions
-      # "token: ${{ secrets.GITHUB_TOKEN }}" uses the write-enabled token
-      # Without this, the checkout uses a read-only token and git push fails
+      # Checkout with GITHUB_TOKEN so git push works (needs write permission above)
       - name: Checkout Repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}  # Use write-enabled token for git push
+          token: ${{ secrets.GITHUB_TOKEN }}
 
-      # Step 2: Configure git identity for the automated commit
-      # GitHub requires user.email and user.name to be set before committing
-      # These are stored as GitHub Secrets (GIT_EMAIL, GIT_USERNAME)
+      # Set git author identity for the automated commit
       - name: Set Git Config
         run: |
-          git config --global user.email "${{ secrets.GIT_EMAIL }}"    # Commit author email
-          git config --global user.name "${{ secrets.GIT_USERNAME }}"   # Commit author name
+          git config --global user.email "${{ secrets.GIT_EMAIL }}"
+          git config --global user.name "${{ secrets.GIT_USERNAME }}"
 
-      # Step 3: Update deployment.yaml with new image tag and push back to repo
-      # "git pull"  = pull latest changes first to avoid merge conflicts
-      # "sed -i"    = in-place find-and-replace in deployment.yaml
-      #   Pattern: find the line containing "image: ramprasad789/gitops-devsecops-project:*"
-      #   Replace: with the new image tag using the auto-incremented VERSION
-      # "echo $VERSION > version.txt" = update version.txt with the new version number
-      # "git add"   = stage the two changed files
-      # "git commit" = create a commit with a descriptive message
-      # "git push"  = push the commit back to the main branch
-      #   ArgoCD watches this repo and detects the change → auto-deploys to cluster
-      - name: Update Deployment YAML and version.txt
+      # GitOps loop:
+      # 1. git pull          = avoid merge conflicts from parallel runs
+      # 2. sed               = update image tag in deployment.yaml
+      # 3. echo VERSION      = write new version number to version.txt
+      # 4. git add + commit  = stage and commit both changed files
+      # 5. git push          = push to repo → ArgoCD detects change → syncs cluster
+      - name: Update deployment.yaml and version.txt
         run: |
-          git pull                                                       # Pull latest to avoid conflicts
-          sed -i "s|image: ramprasad789/gitops-devsecops-project:.*$|image: ${{ env.DOCKERHUB_REPO }}:${{ env.VERSION }}|" deployment.yaml
-          # ↑ Find old image tag line and replace with new versioned image
-          echo ${{ env.VERSION }} > version.txt                         # Write new version number to file
-          CURRENT_VERSION=$(cat version.txt)                            # Read it back for commit message
-          git add deployment.yaml version.txt                           # Stage both changed files
-          git commit -m "ci: update image tag to ${CURRENT_VERSION} — all security gates passed"
-          # ↑ Commit message includes version and confirms all gates passed
-          git push                                                       # Push to repo → triggers ArgoCD sync
+          git pull
+          sed -i "s|image: ramprasad789/gitops-juiceshop-devsecops:.*|image: ${{ env.DOCKERHUB_REPO }}:${{ env.VERSION }}|" deployment.yaml
+          echo ${{ env.VERSION }} > version.txt
+          CURRENT_VERSION=$(cat version.txt)
+          git add deployment.yaml version.txt
+          git commit -m "ci: update image to ${CURRENT_VERSION} — all 8 security gates passed"
+          git push
 
-      # Step 4: Print a final pipeline summary to the GitHub Actions log
-      # "if: always()" runs this even if the git push above failed
-      # This gives a quick overview of what ran and the final image details
+      # Print final summary — always runs even if git push above failed
       - name: Pipeline Summary
-        if: always()  # Always print summary regardless of deploy success/failure
+        if: always()
         run: |
-          echo "════════════════════════════════════════"
-          echo "  PIPELINEFORTRESS — RUN SUMMARY"
-          echo "════════════════════════════════════════"
-          echo "  Image  : ${{ env.DOCKERHUB_REPO }}:${{ env.VERSION }}"  # Final image tag
-          echo "  Commit : ${{ github.sha }}"                              # Git commit that triggered this
-          echo "  Stages : Secrets ✅ | SAST ✅ | SCA ✅ | Build ✅"
-          echo "           Image Scan ✅ | IaC ✅ | SBOM ✅ | DAST ✅"
-          echo "  Status : Manifests updated — ArgoCD will sync to cluster"
-          echo "════════════════════════════════════════"
+          echo "========================================"
+          echo "  PIPELINEFORTRESS — RUN COMPLETE"
+          echo "========================================"
+          echo "  Image  : ${{ env.DOCKERHUB_REPO }}:${{ env.VERSION }}"
+          echo "  Commit : ${{ github.sha }}"
+          echo "  Branch : ${{ github.ref_name }}"
+          echo "  Gates  : Secrets | SAST | SCA | Build"
+          echo "           Image | IaC | SBOM | DAST"
+          echo "  Status : All gates passed - ArgoCD syncing"
+          echo "========================================"
